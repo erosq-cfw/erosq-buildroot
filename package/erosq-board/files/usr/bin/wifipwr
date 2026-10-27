@@ -1,0 +1,11 @@
+#!/bin/sh
+rf=""
+for r in /sys/class/rfkill/rfkill*; do
+	[ "$(cat "$r/name" 2>/dev/null)" = "erosq-wifi-power" ] && rf="$r" && break
+done
+[ -z "$rf" ] && { echo "no erosq-wifi-power rfkill"; exit 1; }
+case "$1" in
+	off) echo 1 > "$rf/soft" && echo "wifi POWERED OFF"  || { echo "wifipwr: write failed"; exit 1; };;
+	on)  echo 0 > "$rf/soft" && echo "wifi powering on"  || { echo "wifipwr: write failed"; exit 1; };;
+	*)   s=$(cat "$rf/soft"); [ "$s" = 0 ] && echo "wifi: ON" || echo "wifi: OFF";;
+esac

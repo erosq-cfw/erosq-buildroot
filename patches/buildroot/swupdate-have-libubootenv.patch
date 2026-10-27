@@ -1,0 +1,14 @@
+diff --git a/package/swupdate/swupdate.mk b/package/swupdate/swupdate.mk
+index 05329d13b8..0952fb5681 100644
+--- a/package/swupdate/swupdate.mk
++++ b/package/swupdate/swupdate.mk
+@@ -24,6 +24,9 @@ SWUPDATE_DEPENDENCIES = json-c libubootenv
+ # available in all external toolchains, and use CC for linking. Ensure
+ # TARGET_CC is used for both.
+ SWUPDATE_MAKE_ENV = CC="$(TARGET_CC)" LD="$(TARGET_CC)" SKIP_STRIP=y
++# erosq: Buildroot never sets HAVE_LIBUBOOTENV, so CONFIG_UBOOT
++# (depends on it) gets dropped by olddefconfig. (LIBUBI/LIBMTD: upstream since 2026.08.)
++SWUPDATE_MAKE_ENV += HAVE_LIBUBOOTENV=y
+ 
+ # we don't package EFI Boot Guard/libebgenv
+ SWUPDATE_MAKE_ENV += HAVE_LIBEBGENV=n

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Graceful SD removal: stop playback, flush, unmount, clear the song db.
+export MPD_HOST=/run/mpd.sock
+mpc stop 2>/dev/null
+sync
+umount /media/sd 2>/dev/null || umount -l /media/sd 2>/dev/null
+mpc update 2>/dev/null     # drops the now-absent tracks from the db
+exit 0

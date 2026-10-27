@@ -1,0 +1,31 @@
+From: erosqcfw <erosqcfw@gmail.com>
+Subject: [PATCH] output: an explicit enable resets the reopen back-off
+
+After an output fails, LockUpdate() only reopens it once REOPEN_AFTER
+(10 s) has passed, unless forced, and MultipleOutputs::Play() never
+forces.  Enabling the output again does not touch fail_timer.  On EROS Q
+the UI moves playback to the Bluetooth output when Bluetooth headphones
+connect; a reconnect within 10 s of the previous disconnect (whose write
+failed with ENODEV) left MPD with the Bluetooth output skipped and the
+DAC disabled, so it paused with "Failed to open audio output" (HITL
+10-21, 6 of 6 failures had a < 10 s gap).  Treat a client's enable as
+"try it now".
+
+---
+--- a/src/output/Control.cxx	2026-10-21 09:35:52.063422138 +0000
++++ b/src/output/Control.cxx	2026-10-21 09:35:52.073923977 +0000
+@@ -131,6 +131,14 @@
+ 	if (new_value == enabled)
+ 		return false;
+ 
++	/* erosq: an explicit enable means "use this output now".  Without
++	   this, an output that failed less than REOPEN_AFTER ago (a
++	   Bluetooth sink that just disconnected) is skipped by the next
++	   non-forced Update(), and with the other output disabled playback
++	   pauses with "Failed to open audio output". */
++	if (new_value)
++		fail_timer.Reset();
++
+ 	enabled = new_value;
+ 	return true;
+ }

@@ -1,0 +1,6 @@
+source "$BR2_EXTERNAL_EROSQ_PATH/package/libldac/Config.in"
+source "$BR2_EXTERNAL_EROSQ_PATH/package/libtinyalsa/Config.in"
+source "$BR2_EXTERNAL_EROSQ_PATH/package/erosq-ui/Config.in"
+source "$BR2_EXTERNAL_EROSQ_PATH/package/mpdctl/Config.in"
+source "$BR2_EXTERNAL_EROSQ_PATH/package/erosq-splash/Config.in"
+source "$BR2_EXTERNAL_EROSQ_PATH/package/erosq-board/Config.in"

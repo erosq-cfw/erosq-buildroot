@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: erosqcfw <erosqcfw@gmail.com>
+Date: Sat, 4 Jul 2026 04:30:00 +0000
+Subject: [PATCH BlueZ] avdtp: make stream_free() NULL-safe
+
+Third MEGABOOM A2DP teardown-race variant. bluetoothd SIGSEGVs on Connect
+with a NULL read @0x0000000c in stream_free() (offset of avdtp_stream.lsep),
+called from the avdtp setconf_cb().
+
+auto_config() (a2dp.c) always invokes setup->setconf_cb(session, setup->stream,
+setup->err) at its "done" label -- including the error/abort path where
+setup->stream has already been NULLed (config aborted, or "unable to select a
+valid configuration") while setup->err is set. The avdtp setconf_cb() takes its
+err!=NULL branch, correctly sends the AVDTP REJECT (built from session+err),
+then calls stream_free(setup->stream) == stream_free(NULL), which dereferences
+stream->lsep -> read @0xc -> crash. bluetoothd then crash-loops (respawned by
+the UI's org.bluez name watch).
+
+Patch 0005 guards auto_config against NULL setup->sep / setup->sep->stream /
+setup->session, but the pointer actually freed here is setup->stream, a
+different field, so those guards do not cover it. Fix at the free site instead
+of adding a fourth auto_config guard: guarding in auto_config would skip the
+REJECT and leave the peer waiting on an unanswered SetConfiguration, whereas a
+NULL-safe stream_free() keeps the reject and, like free()/g_free(), simply does
+nothing when there is no stream to free. Covers every stream_free() caller.
+
+
+Rebased onto 5.86: stream_free() no longer touches lsep first, but still
+dereferences stream->session on its first line.
+
+Signed-off-by: erosqcfw <erosqcfw@gmail.com>
+---
+ profiles/audio/avdtp.c
+
+diff --git a/profiles/audio/avdtp.c b/profiles/audio/avdtp.c
+--- a/profiles/audio/avdtp.c
++++ b/profiles/audio/avdtp.c
+@@ -727,6 +727,9 @@
+ 	struct avdtp_stream *stream = data;
+ 	struct avdtp_remote_sep *rsep;
+ 
++	if (!stream)
++		return;
++
+ 	rsep = find_remote_sep(stream->session->seps, stream->rseid);
+ 	if (rsep)
+ 		rsep->stream = NULL;

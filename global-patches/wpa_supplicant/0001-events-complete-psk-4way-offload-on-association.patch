@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: erosqcfw <erosqcfw@gmail.com>
+Date: Sat, 3 Oct 2026 02:30:00 +0000
+Subject: [PATCH] events: complete PSK 4-way offload on association (brcmfmac)
+
+2.12 changed 4-way handshake offload (WPA_DRIVER_FLAGS_4WAY_HANDSHAKE_PSK)
+to stay in ASSOCIATED until the driver reports the port authorized, via
+NL80211_ATTR_PORT_AUTHORIZED in the connect event or a PORT_AUTHORIZED
+event. brcmfmac (FWSUP PSK, BCM43430 on the EROS Q, kernel 6.18) sends
+neither -- it only calls cfg80211_port_authorized() for 802.1X FT roams --
+so every connect hits the 10 s authentication timeout, deauths with
+reason 3 (locally generated), ignores the BSSID and retries forever.
+
+Same AP/firmware/kernel, 2.11 binary: COMPLETED in 2 s. 2.11 marked the
+connection complete on association for PSK offload; restore that.
+
+Signed-off-by: erosqcfw <erosqcfw@gmail.com>
+---
+ wpa_supplicant/events.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/wpa_supplicant/events.c b/wpa_supplicant/events.c
+--- a/wpa_supplicant/events.c
++++ b/wpa_supplicant/events.c
+@@ -4925,7 +4925,15 @@
+ 		    wpa_key_mgmt_wpa_psk(wpa_s->key_mgmt)) ||
+ 		   ((wpa_s->drv_flags2 & WPA_DRIVER_FLAGS2_OWE_OFFLOAD_STA) &&
+ 		    wpa_s->key_mgmt == WPA_KEY_MGMT_OWE)) {
+-		if (already_authorized) {
++		/*
++		 * erosq: brcmfmac's firmware supplicant (FWSUP PSK) never
++		 * reports the port authorized -- no authorized flag in the
++		 * connect event, no PORT_AUTHORIZED event -- so waiting for it
++		 * hits the 10 s auth timeout and deauths (reason 3), looping
++		 * forever. Trust the driver on PSK offload, as 2.11 did.
++		 */
++		if (already_authorized ||
++		    (wpa_s->drv_flags & WPA_DRIVER_FLAGS_4WAY_HANDSHAKE_PSK)) {
+ 			/*
+ 			 * We are done; the driver will take care of RSN 4-way
+ 			 * handshake.

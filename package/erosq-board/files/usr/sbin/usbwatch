@@ -1,0 +1,22 @@
+#!/bin/sh
+# USB-gadget link watcher: attributes a dropout to the host or the gadget side.
+# 2026-10-20 the host stopped enumerating the gadget at ~09:09 (after ~10 bus
+# resets) while the device kept running; nothing on the device recorded the
+# link state. Polls every 10 s but writes ONLY on a change (plus a heartbeat
+# every 6 h), with the dwc2 kmsg lines seen since the last write. /data (UBIFS)
+# so it survives the reboot that usually ends a dropout; SD/vfat is yank-unsafe.
+# ponytail: 64 KB + one rotated copy; a shell loop costs ~300 KB RSS.
+L=/data/usbwatch.log
+U=/sys/class/udc/13500000.usb
+last=; n=0
+while :; do
+	st="udc=$(cat $U/state 2>/dev/null || echo none) carrier=$(cat /sys/class/net/usb0/carrier 2>/dev/null || echo -) vbus=$(cat /sys/class/power_supply/*/online 2>/dev/null | tr '\n' ,)"
+	n=$((n+1))
+	if [ "$st" != "$last" ] || [ $n -ge 2160 ]; then
+		[ -f $L ] && [ "$(wc -c < $L)" -gt 65536 ] && mv $L $L.1
+		{ echo "$(date -u '+%F %T') up=$(cut -d' ' -f1 /proc/uptime) $st"
+		  dmesg | grep -E 'dwc2|gadget|usb0' | tail -n 12 | sed 's/^/    /'; } >> $L
+		last=$st; n=0
+	fi
+	sleep 10
+done

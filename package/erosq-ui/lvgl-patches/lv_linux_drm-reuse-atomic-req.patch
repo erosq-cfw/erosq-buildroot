@@ -1,0 +1,77 @@
+From: erosqcfw <erosqcfw@gmail.com>
+Subject: [PATCH] drm: reuse one atomic request per display
+
+drm_dmabuf_set_plane() allocated a fresh drmModeAtomicReq for every frame
+and the page-flip handler freed it.  Keep a single request per display
+(drmModeAtomicSetCursor(req, 0) to rewind it) and use drm_dev->req only
+as the "flip pending" marker.  Also fixes the failed-commit path, which
+freed req but left the dangling pointer set.
+
+--- a/src/drivers/display/drm/lv_linux_drm.c
++++ b/src/drivers/display/drm/lv_linux_drm.c
+@@ -65,6 +65,7 @@
+     uint32_t blob_id;
+     drmModeCrtc * saved_crtc;
+     drmModeAtomicReq * req;
++    drmModeAtomicReq * req_cache; /* erosq: one request reused for every commit */
+     drmEventContext drm_event_ctx;
+     drmModePlane * plane;
+     drmModeCrtc * crtc;
+@@ -331,10 +332,9 @@
+     LV_UNUSED(tv_usec);
+     LV_LOG_TRACE("flip");
+     drm_dev_t * drm_dev = user_data;
+-    if(drm_dev->req) {
+-        drmModeAtomicFree(drm_dev->req);
+-        drm_dev->req = NULL;
+-    }
++    /* erosq: req only marks "flip pending"; the request itself is kept in
++     * req_cache and reused by the next commit */
++    drm_dev->req = NULL;
+ }
+ 
+ static int drm_get_plane_props(drm_dev_t * drm_dev)
+@@ -473,7 +473,16 @@
+ 
+ #endif
+ 
+-    drm_dev->req = drmModeAtomicAlloc();
++    /* erosq: reuse one atomic request instead of drmModeAtomicAlloc() +
++     * free per frame (malloc/realloc growth churn showed up as musl
++     * mmap/munmap in the scroll profile) */
++    if(!drm_dev->req_cache)
++        drm_dev->req_cache = drmModeAtomicAlloc();
++    else
++        drmModeAtomicSetCursor(drm_dev->req_cache, 0);
++    if(!drm_dev->req_cache)
++        return -1;
++    drm_dev->req = drm_dev->req_cache;
+ 
+     /* On the first commit (or after lv_linux_drm_force_modeset), do a modeset */
+     if(drm_dev->modeset_pending) {
+@@ -516,7 +525,10 @@
+         /* Keep the damage accumulator: these areas were never presented, so
+          * they must ride along on the next successful commit or the panel
+          * GRAM is left permanently stale there. */
+-        drmModeAtomicFree(drm_dev->req);
++        /* No flip event will come for a failed commit: clear the pending
++         * marker (the old code freed req but left the dangling pointer set,
++         * so the next flush wait spun on it). */
++        drm_dev->req = NULL;
+         return ret;
+     }
+ 
+@@ -1153,9 +1165,10 @@
+ 
+     /* Prevent further flushes & free any pending atomic request */
+     lv_display_set_flush_cb(disp, NULL);
+-    if(drm_dev->req) {
+-        drmModeAtomicFree(drm_dev->req);
+-        drm_dev->req = NULL;
++    drm_dev->req = NULL;
++    if(drm_dev->req_cache) {
++        drmModeAtomicFree(drm_dev->req_cache);
++        drm_dev->req_cache = NULL;
+     }
+ 
+ #if LV_USE_LINUX_DRM_GBM_BUFFERS

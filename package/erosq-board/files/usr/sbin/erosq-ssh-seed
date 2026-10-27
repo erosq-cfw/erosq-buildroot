@@ -1,0 +1,22 @@
+#!/bin/sh
+# Lockout guard for root SSH, run by S05mounts once /data is mounted.
+# /root/.ssh links to /data/root/.ssh, and the image ships no keys. A private
+# build may ship a seed file (BR2_PACKAGE_EROSQ_BOARD_SEED_AUTHORIZED_KEYS);
+# if so, and /data has no authorized_keys yet, install the seed ONCE. The
+# .seeded marker keeps a later deliberate delete from being undone. Public
+# builds ship no seed file, so this does nothing.
+# EROSQ_SEED_ROOT prefixes every path (host tests).
+R=${EROSQ_SEED_ROOT:-}
+SEED="$R/usr/share/erosq/seed-authorized_keys"
+DIR="$R/data/root/.ssh"
+[ -s "$SEED" ] || exit 0
+[ -e "$DIR/.seeded" ] && exit 0
+mkdir -p "$DIR" && chmod 0700 "$DIR" || exit 1
+if [ ! -e "$DIR/authorized_keys" ]; then
+	(umask 077; cp "$SEED" "$DIR/authorized_keys.new") \
+		&& chmod 0600 "$DIR/authorized_keys.new" \
+		&& mv "$DIR/authorized_keys.new" "$DIR/authorized_keys" \
+		|| { rm -f "$DIR/authorized_keys.new"; echo "erosq-ssh-seed: seeding failed" >&2; exit 1; }
+	echo "erosq-ssh-seed: seeded /data/root/.ssh/authorized_keys"
+fi
+: >"$DIR/.seeded"

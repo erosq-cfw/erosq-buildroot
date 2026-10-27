@@ -1,0 +1,30 @@
+From: erosqcfw <erosqcfw@gmail.com>
+Subject: [PATCH] albumart: also find folder.jpg, front.jpg, AlbumArt.jpg
+
+find_stream_art() only tries cover.png, cover.jpg and cover.webp.  Folder
+images from Windows Media Player, many rippers and older players are named
+folder.jpg, front.jpg or AlbumArt.jpg, so `albumart` answered "No file
+exists" for albums that do have a folder image.  Try those names after
+cover.* (cover.* keeps priority).  A found image is cached per directory
+by LastInputStream; an album with no image costs up to nine failed open()s
+per albumart request instead of three.
+
+---
+--- a/src/command/FileCommands.cxx	2026-10-24 02:07:05.207297260 +0000
++++ b/src/command/FileCommands.cxx	2026-10-24 02:07:05.218117861 +0000
+@@ -134,6 +134,15 @@
+ 		"cover.png",
+ 		"cover.jpg",
+ 		"cover.webp",
++		/* EROS Q: names other rippers/players use for the folder
++		   image, tried after cover.*; FAT matches case-insensitively,
++		   Folder.jpg covers case-sensitive storage */
++		"folder.jpg",
++		"folder.png",
++		"front.jpg",
++		"AlbumArt.jpg",
++		"albumart.jpg",
++		"Folder.jpg",
+ 	};
+ 
+ 	for(const auto name : art_names) {

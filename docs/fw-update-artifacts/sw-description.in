@@ -1,0 +1,29 @@
+{
+  "software": {
+    "version": "@FWVER@",
+    "slotsel": {
+      "a": {
+        "images": [
+          { "name": "kernel", "filename": "erosq.itb",      "type": "ubivol", "volume": "kernel_b", "version": "@KVER@", "sha256": "@K_SHA@" },
+          { "name": "rootfs", "filename": "rootfs.squashfs", "type": "ubivol", "volume": "rootfs_b", "version": "@RVER@", "sha256": "@R_SHA@" }
+        ],
+        "bootenv": [
+          { "name": "boot_try",          "value": "b" },
+          { "name": "upgrade_available", "value": "1" },
+          { "name": "bootcount",         "value": "0" }
+        ]
+      },
+      "b": {
+        "images": [
+          { "name": "kernel", "filename": "erosq.itb",      "type": "ubivol", "volume": "kernel",  "version": "@KVER@", "sha256": "@K_SHA@" },
+          { "name": "rootfs", "filename": "rootfs.squashfs", "type": "ubivol", "volume": "rootfs",  "version": "@RVER@", "sha256": "@R_SHA@" }
+        ],
+        "bootenv": [
+          { "name": "boot_try",          "value": "a" },
+          { "name": "upgrade_available", "value": "1" },
+          { "name": "bootcount",         "value": "0" }
+        ]
+      }
+    }
+  }
+}

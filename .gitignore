@@ -1,0 +1,5 @@
+*.swp
+# stock EROS Q firmware for the WiFi/BT chip blobs (never commit)
+/stock/
+# private SSH seed keys etc. for private builds (never commit)
+/private/

@@ -1,0 +1,65 @@
+From: erosqcfw <erosqcfw@gmail.com>
+Subject: [PATCH] state file: keep queued songs the database does not know yet
+
+When the state file is restored, each queued song is looked up in the
+database and dropped if it is not there.  On EROS Q the database can
+lag the SD card at boot: music added while the device was off, a
+swapped card, or a database cut short by a cancelled update (see 0005).
+The boot update (S96sdscan) runs only after mpd has loaded the state,
+so those entries vanish (10-23: 34 of 57), and the next power-off saves
+the shorter queue for good.
+
+For the state file loader only (it is the one SongLoader without a
+client), fall back to reading the song's tags from the music storage.
+A song whose file is really gone is still dropped.  The cost is one
+tag read per missing song at startup, and nothing when the db is
+current.
+
+---
+diff --git a/src/SongLoader.cxx b/src/SongLoader.cxx
+index 264d6b0..b4d34b9 100644
+--- a/src/SongLoader.cxx
++++ b/src/SongLoader.cxx
+@@ -7,6 +7,7 @@
+ #include "client/IClient.hxx"
+ #include "db/DatabaseSong.hxx"
+ #include "storage/StorageInterface.hxx"
++#include "fs/AllocatedPath.hxx"
+ #include "song/DetachedSong.hxx"
+ #include "PlaylistError.hxx"
+ #include "config.h"
+@@ -26,8 +27,32 @@ DetachedSong
+ SongLoader::LoadFromDatabase(const char *uri) const
+ {
+ #ifdef ENABLE_DATABASE
+-	if (db != nullptr)
+-		return DatabaseDetachSong(*db, storage, uri);
++	if (db != nullptr) {
++		try {
++			return DatabaseDetachSong(*db, storage, uri);
++		} catch (...) {
++			/* erosq: only the state file restore has no
++			   client.  The db can lag the card at boot (music
++			   added while off; the boot update runs after mpd
++			   starts), and dropping the queue entries it does
++			   not know yet loses them for good at the next
++			   power-off.  Read the file's tags instead; a song
++			   whose file is gone is still dropped. */
++			if (client != nullptr || storage == nullptr)
++				throw;
++
++			const auto path_fs = storage->MapFS(uri);
++			if (path_fs.IsNull())
++				throw;
++
++			DetachedSong song(uri);
++			if (!song.LoadFile(path_fs))
++				throw;
++
++			song.SetRealURI(storage->MapUTF8(uri));
++			return song;
++		}
++	}
+ #else
+ 	(void)uri;
+ #endif

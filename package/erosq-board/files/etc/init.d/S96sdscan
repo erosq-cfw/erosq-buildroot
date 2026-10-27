@@ -1,0 +1,14 @@
+#!/bin/sh
+# One-shot library refresh after MPD starts (catches a card swapped while off).
+# Incremental: cheap when the card is unchanged.
+case "$1" in
+	start)
+		export MPD_HOST=/run/mpd.sock
+		# Wait briefly for MPD's socket to accept connections.
+		i=0
+		while [ $i -lt 10 ] && [ ! -S /run/mpd.sock ]; do i=$((i+1)); sleep 1; done
+		mpc update >/dev/null 2>&1 || true
+		;;
+	stop) ;;
+	*) echo "Usage: $0 {start|stop}"; exit 1 ;;
+esac

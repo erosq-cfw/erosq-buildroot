@@ -1,0 +1,8 @@
+#!/bin/sh
+# Record which wlan0 instance (ifindex) the running udhcpc is bound to, so
+# wifi_dhcp.sh can tell a client stranded on a re-probed-away wlan0. udhcpc
+# runs "deconfig" right at start, so the record exists from the first moment.
+case "$1" in deconfig|bound|renew) ;; *) exit 0 ;; esac
+[ "$interface" = wlan0 ] || exit 0
+cat /sys/class/net/wlan0/ifindex > /run/udhcpc.ifindex 2>/dev/null
+exit 0

@@ -1,0 +1,7 @@
+config BR2_PACKAGE_MPDCTL
+	bool "mpdctl"
+	help
+	  Minimal MPD client over the AF_UNIX socket (/run/mpd.sock, or
+	  $MPD_HOST_SOCK). Each argument is sent as one MPD command,
+	  then "close"; the reply is copied to stdout. Used by erosq-ui
+	  ("mpdctl stop" before an update). Installs /usr/bin/mpdctl.

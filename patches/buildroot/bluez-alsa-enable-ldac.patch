@@ -1,0 +1,18 @@
+diff --git a/package/bluez-alsa/bluez-alsa.mk b/package/bluez-alsa/bluez-alsa.mk
+index 8a5abe3f..ca8511d3 100644
+--- a/package/bluez-alsa/bluez-alsa.mk
++++ b/package/bluez-alsa/bluez-alsa.mk
+@@ -87,6 +87,13 @@ else
+ BLUEZ_ALSA_CONF_OPTS += --without-libopenaptx --disable-aptx --disable-aptx-hd
+ endif
+ 
++ifeq ($(BR2_PACKAGE_LIBLDAC),y)
++BLUEZ_ALSA_DEPENDENCIES += libldac
++BLUEZ_ALSA_CONF_OPTS += --enable-ldac
++else
++BLUEZ_ALSA_CONF_OPTS += --disable-ldac
++endif
++
+ ifeq ($(BR2_PACKAGE_OPUS),y)
+ BLUEZ_ALSA_DEPENDENCIES += opus
+ BLUEZ_ALSA_CONF_OPTS += --enable-opus

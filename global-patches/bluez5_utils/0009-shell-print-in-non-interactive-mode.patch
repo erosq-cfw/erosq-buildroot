@@ -1,0 +1,37 @@
+From: erosqcfw <erosqcfw@gmail.com>
+Subject: [PATCH] shared/shell: print in non-interactive mode again
+
+bt_shell_printf() returns early when no input is attached, but
+non-interactive mode (bluetoothctl <command>) never attaches one, so
+every non-interactive command printed nothing (bluez 5.86 on EROS Q:
+`bluetoothctl show` -> empty, rc 0).  bt_audio_up.sh polls
+`bluetoothctl show | grep Powered:` after starting bluetoothd, so it
+timed out and exited before starting bluealsa.
+
+---
+--- a/src/shared/shell.c	2026-10-03 22:13:11.653237663 +0000
++++ b/src/shared/shell.c	2026-10-03 22:13:11.667429926 +0000
+@@ -711,9 +711,10 @@
+ 	char *saved_line;
+ 	int saved_point;
+ 
+-	if (queue_isempty(data.inputs))
+-		return;
+-
++	/* Non-interactive mode never attaches an input (bt_shell_attach
++	 * runs the command instead), so check it before the empty-inputs
++	 * bail-out -- otherwise `bluetoothctl show` etc. print nothing.
++	 */
+ 	if (data.mode == MODE_NON_INTERACTIVE) {
+ 		va_start(args, fmt);
+ 		vprintf(fmt, args);
+@@ -721,6 +722,9 @@
+ 		return;
+ 	}
+ 
++	if (queue_isempty(data.inputs))
++		return;
++
+ 	save_input = !RL_ISSTATE(RL_STATE_DONE);
+ 
+ 	if (save_input) {

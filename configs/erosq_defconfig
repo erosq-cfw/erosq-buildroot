@@ -1,0 +1,140 @@
+# EROS Q (Ingenic X1000) rootfs — musl userspace via Buildroot.
+# Kernel + U-Boot are HAND-BUILT (out of scope); Buildroot consumes prebuilt .ko.
+
+# Architecture / ABI — must match device exactly: o32 mips32r2 hard-float FPXX LE (0x70001007)
+BR2_mipsel=y
+BR2_mips_32r2=y
+# BR2_MIPS_SOFT_FLOAT is not set
+
+# Toolchain — already built in output/host (musl, gcc 14, C++, size-optimized)
+BR2_TOOLCHAIN_BUILDROOT_MUSL=y
+# gcc 15 (BR 2026.08 default). Note .gcda profiles are stamped with
+# major+minor (B43* = 14.3), so ANY gcc change -- 14.3->14.4 included --
+# drops pcsx PGO until re-profiled on device.
+BR2_GCC_VERSION_15_X=y
+# Headers must be <= the running kernel (6.12.93): userspace built against
+# newer headers can hit ENOSYS on syscalls/ioctls 6.12 lacks. NOTE: changing
+# this from 6.18 forces a full toolchain (and world) rebuild.
+BR2_KERNEL_HEADERS_6_12=y
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+BR2_OPTIMIZE_S=y
+BR2_DOWNLOAD_FORCE_CHECK_HASHES=y
+# Extra per-package patches from the external tree; carries the bluez5_utils
+# NULL-sep crash fix (0005) so a re-provisioned Buildroot can't silently lose it.
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_EROSQ_PATH)/global-patches"
+
+# Serial console/getty — device uses console=ttyS2,115200n8
+BR2_TARGET_GENERIC_GETTY_PORT="ttyS2"
+BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
+
+# Local audio: MPD + decoder set
+BR2_PACKAGE_MPD=y
+# MPD_MAD is default-y; mpg123 already decodes MP3 — mad would ship a 2nd
+# MP3 decoder (libmad) for nothing on the 24MB vol1.
+# BR2_PACKAGE_MPD_MAD is not set
+BR2_PACKAGE_MPD_FAAD2=y
+BR2_PACKAGE_MPD_FLAC=y
+BR2_PACKAGE_MPD_MPG123=y
+# id3tag: MP3 embedded art (APIC) for readpicture; FLAC art needs nothing extra
+BR2_PACKAGE_MPD_ID3TAG=y
+BR2_PACKAGE_MPD_OPUS=y
+BR2_PACKAGE_MPD_VORBIS=y
+BR2_PACKAGE_MPD_MPC=y
+
+# Bluetooth A2DP source stack
+BR2_PACKAGE_BLUEZ_ALSA=y
+BR2_PACKAGE_BLUEZ5_UTILS_CLIENT=y
+BR2_PACKAGE_LIBOPENAPTX=y
+
+# WiFi / BT bring-up tools
+BR2_PACKAGE_BRCM_PATCHRAM_PLUS=y
+BR2_PACKAGE_IW=y
+BR2_PACKAGE_WPA_SUPPLICANT=y
+BR2_PACKAGE_WPA_SUPPLICANT_CLI=y
+
+# ssh server (no client)
+BR2_PACKAGE_DROPBEAR=y
+# BR2_PACKAGE_DROPBEAR_CLIENT is not set
+
+# Rootfs — read-only squashfs (zstd: ~5x less decompress CPU than xz on the
+# 1GHz XBurst, costs +1.3MB image and +450KB kernel workspace) for SPI-NAND/UBI.
+# The system volume is RO;
+# persistent state lives on the writable `sysdata` UBIFS volume mounted at /data
+# (see package/erosq-board/files/etc/init.d/S05mounts). ext4 image kept as a
+# fallback (harmless; useful for eMMC bring-up / recovery).
+BR2_TARGET_ROOTFS_SQUASHFS=y
+# 64K blocks (default 128K): the kernel sizes its squashfs buffers by block size
+# -- zstd dstream workspace (vmalloc, window+2*block+in-buf: ~607K -> ~351K),
+# fragment cache 2 x block (-128K), read_page cache 1 x block (-64K) => ~448K
+# less kernel RAM (source-derived; confirm via MemTotal/MemAvailable after
+# install). Image 10.47 -> 10.80 MB, rootfs(_b) volumes are 25.27 MB.
+BR2_TARGET_ROOTFS_SQUASHFS_BS_64K=y
+BR2_TARGET_ROOTFS_SQUASHFS4_ZSTD=y
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_4=y
+BR2_TARGET_ROOTFS_EXT2_SIZE="512M"
+# BR2_TARGET_ROOTFS_TAR is not set
+
+# mtd-utils (ubiattach/ubimkvol/mkfs.ubifs on target for sysdata maintenance) +
+# its deps. LZO for UBIFS compression; libuuid (util-linux) for mkfs.ubifs.
+BR2_PACKAGE_MTD=y
+BR2_PACKAGE_LZO=y
+BR2_PACKAGE_UTIL_LINUX=y
+BR2_PACKAGE_UTIL_LINUX_LIBUUID=y
+
+# Board scripts
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_EROSQ_PATH)/board/erosq/post-build.sh"
+BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_EROSQ_PATH)/board/erosq/post-image.sh"
+
+# LDAC codec (custom package)
+BR2_PACKAGE_LIBLDAC=y
+
+# tinyalsa 1.1.1 (custom; for erosq-ui)
+BR2_PACKAGE_LIBTINYALSA=y
+
+# erosq-ui LVGL front-end (custom)
+BR2_PACKAGE_EROSQ_UI=y
+# Doom / GB / GBA emulators moved to the SD bundle (/media/sd/{doom,gb,gba}),
+# mirroring pcsx/opentyrian/openjazz -- flash is a pure system image now.
+# The launchers live in the sd-bundle repo; Doom builds from doomgeneric-erosq.
+# SD-bundle OpenTyrian + OpenJazz link libSDL2 from rootfs /usr/lib (launcher
+# sets no LD_LIBRARY_PATH). Audio-only: no video sub-options (they draw via DRM).
+# Was only in the image as stale output/target leftovers until the 2026.08 bump.
+BR2_PACKAGE_SDL2=y
+
+# mpdctl MPD socket client (custom; built from package/mpdctl/src)
+BR2_PACKAGE_MPDCTL=y
+
+# erosq-splash fallback DRM splash (custom; built from package/erosq-splash/src)
+BR2_PACKAGE_EROSQ_SPLASH=y
+
+# EROS board support (firmware, modules, scripts, splash)
+BR2_PACKAGE_EROSQ_BOARD=y
+
+# U-Boot env tools: fw_printenv / fw_setenv are provided by libubootenv
+# (pulled in by swupdate below), NOT uboot-tools — both packages install
+# /usr/bin/fw_setenv and would conflict. Keep uboot-tools itself (other
+# subtools), just drop its fw_printenv/fw_setenv variant.
+BR2_PACKAGE_UBOOT_TOOLS=y
+# BR2_PACKAGE_UBOOT_TOOLS_FWPRINTENV is not set
+
+# Firmware update: swupdate w/ mbedTLS crypto, ubivol handler, RSA-PSS
+# signed-image verification, U-Boot (libubootenv) bootloader support.
+# LEAN build for the 32MB RAM target: no webserver/mongoose (image is
+# delivered another way, e.g. USB/local file), no suricatta, no systemd,
+# no Lua, no curl. libubootenv (auto-selected by swupdate) provides
+# fw_setenv/fw_printenv — see uboot-tools note above.
+BR2_PACKAGE_SWUPDATE=y
+BR2_PACKAGE_SWUPDATE_CONFIG="$(BR2_EXTERNAL_EROSQ_PATH)/board/erosq/swupdate.config"
+# BR2_PACKAGE_SWUPDATE_WEBSERVER is not set
+BR2_PACKAGE_MBEDTLS=y
+# expat: XML parser for podindex (podcast feeds). Already pulled in by dbus --
+# declaring it here makes the dependency explicit rather than transitive.
+BR2_PACKAGE_EXPAT=y
+
+# busybox: enable wget's https support (internal TLS). CONFIG_TLS was already
+# on but unreferenced -- wget gates https behind its own option, so https URLs
+# were rejected outright. Required for podcast feeds; see the fragment file.
+BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_EROSQ_PATH)/board/erosq/busybox-podcast.fragment"
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HID=y
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HOG=y

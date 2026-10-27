@@ -1,0 +1,17 @@
+From: erosqcfw <erosqcfw@gmail.com>
+Subject: [PATCH] interval.h: include sys/types.h for ssize_t
+
+musl does not pull ssize_t in through stdlib.h.
+
+---
+diff --git a/include/tinyalsa/interval.h b/include/tinyalsa/interval.h
+--- a/include/tinyalsa/interval.h
++++ b/include/tinyalsa/interval.h
+@@ -30,6 +30,7 @@
+ #define TINYALSA_INTERVAL_H
+ 
+ #include <stdlib.h>
++#include <sys/types.h> /* ssize_t (musl doesn't pull it in transitively) */
+ 
+ /** A closed range signed interval. */
+ 

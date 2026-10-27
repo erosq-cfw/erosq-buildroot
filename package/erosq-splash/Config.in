@@ -1,0 +1,8 @@
+config BR2_PACKAGE_EROSQ_SPLASH
+	bool "erosq-splash"
+	help
+	  Fallback boot splash: loads a 320x240 RGB565 image (argv[1],
+	  default /etc/splash.raw) into a DRM dumb buffer on
+	  /dev/dri/card0, sets the mode and holds it until killed. No
+	  libdrm. erosq-uilaunch execs it when erosq-ui fails to start.
+	  Installs /sbin/erosq-splash.

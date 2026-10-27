@@ -1,0 +1,36 @@
+#!/bin/sh
+# 16 MB zram swap — headroom on the 23.6 MB device (shrunk from 32M 2026-07-06:
+# a 32M ceiling can never fill on a 24M-managed box, and its larger zsmalloc
+# pool only widens the fragmentation residue; measured net RAM saved by zram was
+# ~0 under load — codec 2.55:1 cancelled by 2.55x pool overhead. See
+# [[erosq-resource-savings-2026-07]]. 16M still covers the anon working set.
+# NOTE: the zsmalloc pool fragments during boot pressure and holds a ~600 KB
+# idle residue (mem_used >> live compressed data; compact can't reclaim it).
+# Left as-is; see docs/zram-idle-fragmentation.md for the measured finding and a
+# ready-to-enable one-shot post-boot reset if idle headroom ever matters.
+case "$1" in
+	start)
+		if [ -e /sys/block/zram0/disksize ]; then
+			# lzo-rle, NOT zstd (reverted 2026-07-06). zram clamps zstd's window to
+			# one 4K page (windowLog=12) so its dictionary edge is dead: measured
+			# codec was only 2.55:1 (barely over lzo-rle's 2.75:1) while costing
+			# ~193KB/CPU workspace vs lzo-rle's ~16KB. lzo-rle's zero-run encoding
+			# suits anon pages and reclaims ~165KB. MUST precede disksize (algo is
+			# fixed once the device is sized). Kernel default is now lzo-rle too;
+			# explicit for robustness -- harmless no-op if the backend is absent.
+			echo lzo-rle > /sys/block/zram0/comp_algorithm 2>/dev/null
+			echo 16M > /sys/block/zram0/disksize 2>/dev/null
+			mkswap /dev/zram0 >/dev/null 2>&1 && swapon /dev/zram0 2>/dev/null
+			# NB: Buildroot busybox swapon has no -p (priority) flag — don't use it.
+		fi
+		# swappiness lives in /etc/sysctl.conf (S02sysctl) now. The old
+		# swappiness=10 "dormant safety net" tuning let a 2026-07-03 transfer
+		# OOM-kill mpd+bluealsa while zram sat 99% empty — idle anon must be
+		# allowed to compress out. Hot pages (MPD's live audio buffer) stay
+		# resident under LRU regardless; revert here if playback ever stutters
+		# from swap churn.
+		echo 120 > /proc/sys/vm/vfs_cache_pressure 2>/dev/null
+		;;
+	stop) swapoff /dev/zram0 2>/dev/null || true ;;
+	*) echo "Usage: $0 {start|stop}"; exit 1 ;;
+esac

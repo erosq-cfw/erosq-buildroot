@@ -1,0 +1,25 @@
+#!/bin/sh
+# Save MPD's queue + current track + elapsed time across a power-off.
+#
+# mpd keeps its state_file on tmpfs (/run/mpd.state, see mpd.conf) and only
+# writes it on a clean exit or every state_file_interval (120 s) -- so the
+# only way to get an up-to-date snapshot RIGHT NOW is to shut mpd down
+# cleanly. That is exactly what the Extras launchers already rely on. Kill,
+# wait for the write, copy the file to /data; S05mounts puts it back next boot
+# (rewritten play->pause so the device never powers on blaring).
+#
+# Called by erosq-ui on the graceful power-off path (Shutdown menu + auto-off)
+# right before /sbin/poweroff. One tiny NAND write per power-off.
+#
+# Kill/wait pattern mirrors erosq-usbgadget stop_mpd: S95mpd stop's
+# start-stop-daemon --exec match is unreliable under musl, so never use it.
+killall mpd 2>/dev/null || exit 0     # no mpd -> nothing to save
+i=0
+while pidof mpd >/dev/null 2>&1; do
+	i=$((i+1))
+	[ $i -ge 8 ] && killall -9 mpd 2>/dev/null   # -9 loses the state; but never hang power-off
+	[ $i -ge 12 ] && break
+	sleep 1
+done
+[ -s /run/mpd.state ] && cp /run/mpd.state /data/mpd.state.new && mv /data/mpd.state.new /data/mpd.state
+exit 0

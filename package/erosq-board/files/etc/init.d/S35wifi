@@ -1,0 +1,14 @@
+#!/bin/sh
+# WiFi is DEFERRED at boot: cfg80211/brcmfmac are built into the kernel
+# (CONFIG_MODULES=n, always resident), but the erosq-wifi-power rfkill (pwrseq
+# hard gate) is default-BLOCKED, so the chip stays unpowered, unenumerated and
+# firmware-less until first use — saving battery, the firmware buffer, and
+# wpa_supplicant/udhcpc during local playback (the common case). erosq-ui's
+# WiFi toggle / boot-restore runs wifi_up.sh (backgrounded; handles the power
+# gate itself). Nothing to do at boot.
+# Manual bring-up + associate + clock sync: `wifi_connect.sh` (wraps wifi_up.sh).
+case "$1" in
+	start) ;;
+	stop)  ;;
+	*) echo "Usage: $0 {start|stop}"; exit 1 ;;
+esac

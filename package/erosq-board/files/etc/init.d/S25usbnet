@@ -1,0 +1,11 @@
+#!/bin/sh
+# USB gadget: compose the always-on configfs composite (CDC-ECM usb0 =
+# 192.168.7.1 for host dev-access/SSH over USB, + a mass-storage LUN that
+# erosq-usbgadget toggles for "USB file transfer" mode). Replaces the old
+# legacy g_ether auto-bind (CONFIG_USB_ETH removed so configfs owns the UDC).
+case "$1" in
+	start) /usr/bin/erosq-usbgadget net
+	       setsid /usr/sbin/usbwatch </dev/null >/dev/null 2>&1 & ;;   # link-state log, /data/usbwatch.log
+	stop)  ifconfig usb0 down 2>/dev/null || true ;;
+	*) echo "Usage: $0 {start|stop}"; exit 1 ;;
+esac

@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBLDAC
+	bool "libldac"
+	help
+	  Sony LDAC Bluetooth A2DP encoder (libldacBT). Built from the
+	  EROS Q vendored ldacBT source.

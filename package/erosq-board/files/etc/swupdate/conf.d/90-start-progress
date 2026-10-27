@@ -1,0 +1,9 @@
+# Overrides /usr/lib/swupdate/conf.d/90-start-progress (swupdate.sh sources the /etc copy
+# instead). Buildroot's default backgrounds `swupdate-progress -w -r`, which we do NOT want:
+#  - nothing consumes it: the UI (ui_update.c) runs `swupdate -i` itself, parses its stdout
+#    and reboots via /sbin/reboot (clean rcK); the progress socket is optional for swupdate;
+#  - with no swupdate daemon it busy-polls connect() every 10 ms forever (~100 wakeups/s,
+#    ~1.3% CPU at idle) and holds ~44 kB anon+swap;
+#  - its -r does a raw reboot(RB_AUTOBOOT) 5 s after SUCCESS (sync, no rcK: mpd not stopped,
+#    /data not unmounted), racing the UI's clean reboot.
+# CLI installs over ssh must now reboot explicitly:  swupdate -i ... && reboot

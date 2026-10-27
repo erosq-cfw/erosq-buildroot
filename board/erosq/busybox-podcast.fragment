@@ -1,0 +1,23 @@
+# EROS Q busybox config fragment.
+#
+# CONFIG_TLS=y is already set by the Buildroot default config, but NOTHING
+# referenced it: wget's https support is gated behind its own option, and
+# ssl_client is not enabled. So `wget https://...` died with
+# "not an http or ftp url" at networking/wget.c:578 (SSL_SUPPORTED == 0),
+# found on hardware while bringing up podcast RSS support.
+#
+# FEATURE_WGET_HTTPS uses busybox's INTERNAL TLS (networking/tls.c), not an
+# external openssl helper -- deliberate: it needs no extra package. It does
+# NOT verify server certificates (tls.c:1505 "we do not verify cert
+# validity"), which is an accepted trade for fetching public podcast audio.
+CONFIG_FEATURE_WGET_HTTPS=y
+
+# ntpd (client only): sets the clock on each WiFi DHCP lease, then hwclock
+# saves it to the RTC -- see /usr/share/udhcpc/default.script.d/50-ntp-rtc.
+CONFIG_NTPD=y
+# CONFIG_FEATURE_NTPD_SERVER is not set
+# CONFIG_FEATURE_NTPD_CONF is not set
+
+# No FTP in wget: nothing here needs it, and with it on a feed server could
+# redirect a podcast download to ftp:// (busybox follows http->ftp redirects).
+# CONFIG_FEATURE_WGET_FTP is not set

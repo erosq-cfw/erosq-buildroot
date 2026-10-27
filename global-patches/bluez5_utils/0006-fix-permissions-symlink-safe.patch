@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: erosqcfw <erosqcfw@gmail.com>
+Date: Thu, 3 Jul 2026 03:30:00 +0000
+Subject: [PATCH BlueZ] build: make bluetoothd-fix-permissions symlink-safe
+
+On the EROS Q the rootfs is a read-only squashfs, so BlueZ's pairing state
+dir (/var/lib/bluetooth) is baked into the image as an absolute symlink into
+the writable /data UBIFS (Buildroot post-build). The install-data-hook then
+runs `install -dm700 $(DESTDIR)$(statedir)`, which follows that symlink to the
+host's /data/lib/bluetooth on any incremental bluez rebuild (the symlink is
+already present from a prior build) and fails:
+
+    install: cannot change permissions of '.../var/lib/bluetooth': No such file
+
+A clean build is fine (bluez installs before post-build creates the symlink),
+but every incremental rebuild aborts. Skip the state-dir creation when it is
+already a symlink -- the post-build step owns it then.
+
+Signed-off-by: erosqcfw <erosqcfw@gmail.com>
+---
+ Makefile.am | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Makefile.am b/Makefile.am
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -33,7 +33,7 @@
+ 
+ bluetoothd-fix-permissions:
+ 	install -dm755 $(DESTDIR)$(confdir)
+-	install -dm700 $(DESTDIR)$(statedir)
++	test -L $(DESTDIR)$(statedir) || install -dm700 $(DESTDIR)$(statedir)
+ 
+ if DATAFILES
+ dbusdir = $(DBUS_CONFDIR)/dbus-1/system.d

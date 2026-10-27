@@ -1,0 +1,5 @@
+# lo only. usb0 is configured by S25usbnet; wlan0 by wifi_connect.sh (wpa_supplicant+udhcpc).
+# (Buildroot's default eth0-dhcp stanza is removed — the device has no eth0, and it caused a
+#  ~10s boot timeout waiting for the interface to appear.)
+auto lo
+iface lo inet loopback

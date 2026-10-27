@@ -1,0 +1,22 @@
+diff --git a/package/gcc/gcc.mk b/package/gcc/gcc.mk
+index ea96286c32..1b7af3591e 100644
+--- a/package/gcc/gcc.mk
++++ b/package/gcc/gcc.mk
+@@ -220,6 +220,17 @@ endif
+ ifneq ($(GCC_TARGET_ARCH),)
+ HOST_GCC_COMMON_CONF_OPTS += --with-arch="$(GCC_TARGET_ARCH)"
+ endif
++# erosq: the X1000 is an Ingenic XBurst1 (single-issue, in-order mips32r2).
++# Buildroot exposes no MIPS -mtune knob (BR2_mips_xburst still tunes generic),
++# so bake the closest matching pipeline model, 24kc, into the toolchain default.
++# Flows to ALL target code including the standalone pcsx_rearmed build that
++# borrows this toolchain. Measured +2-4% on CPU-bound code (pcsx gpu_unai/gte);
++# scheduling-only, no ISA/ABI change. Guarded on mips32r2 so it stays inert if
++# the tree is ever reconfigured for another arch.
++# ponytail: hardcoded (not a Config.in knob) — single fixed vendor target, YAGNI.
++ifeq ($(GCC_TARGET_ARCH),mips32r2)
++HOST_GCC_COMMON_CONF_OPTS += --with-tune=24kc
++endif
+ ifneq ($(GCC_TARGET_ABI),)
+ HOST_GCC_COMMON_CONF_OPTS += --with-abi="$(GCC_TARGET_ABI)"
+ endif

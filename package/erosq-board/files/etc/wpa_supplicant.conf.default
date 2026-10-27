@@ -1,0 +1,8 @@
+# Skeleton for /data/etc/wpa_supplicant.conf (seeded by S05mounts on first boot;
+# wifi_up.sh runs wpa_supplicant -c on that real path, not on the /etc symlink:
+# SAVE_CONFIG writes a temp file next to the -c path and /etc is read-only).
+# update_config=1 lets erosq-ui persist networks via SAVE_CONFIG.
+# Deliberately NO network block: Buildroot's stock sample ships a wildcard
+# open network ({ key_mgmt=NONE }, no ssid) that auto-joins ANY open AP.
+ctrl_interface=/var/run/wpa_supplicant
+update_config=1

@@ -1,0 +1,82 @@
+From: erosqcfw <erosqcfw@gmail.com>
+Subject: [PATCH] player: cap decoded read-ahead while paused
+
+A paused song keeps the decoder filling the music pipe until the whole
+audio_buffer_size is full of decoded PCM, and that memory stays pinned
+for as long as playback is paused.  On EROS Q the state restored at
+boot is "paused", so 1 MiB of anonymous memory (of a 26 MB system) was
+held at idle.  While paused, stop the decoder at ~1 s of audio
+(buffer_before_play, min 16 chunks); unpausing lifts the cap and wakes
+the decoder.
+
+---
+--- a/src/decoder/Control.hxx	2026-10-03 21:48:57.488221871 +0000
++++ b/src/decoder/Control.hxx	2026-10-03 21:48:57.532800332 +0000
+@@ -98,6 +98,16 @@
+ 	bool seekable;
+ 
+ 	/**
++	 * erosq: while the player is paused, the decoder stops
++	 * filling the pipe once it holds this many chunks (0 = no
++	 * limit).  Without it a paused song (e.g. the state restored
++	 * at boot) pins the whole audio_buffer_size of decoded PCM in
++	 * RAM for as long as it stays paused.  Protected by #mutex;
++	 * the player signals #cond when it lowers the limit.
++	 */
++	unsigned pause_chunk_limit = 0;
++
++	/**
+ 	 * @see #DecoderBridge::initial_seek_essential
+ 	 */
+ 	bool initial_seek_essential;
+--- a/src/decoder/Bridge.cxx	2026-10-03 21:48:57.496210377 +0000
++++ b/src/decoder/Bridge.cxx	2026-10-03 21:48:57.532895031 +0000
+@@ -108,6 +108,17 @@
+ 		return current_chunk.get();
+ 
+ 	do {
++		{
++			/* erosq: paused - don't decode more than
++			   pause_chunk_limit chunks ahead */
++			std::unique_lock lock{dc.mutex};
++			if (dc.pause_chunk_limit > 0 && dc.pipe != nullptr &&
++			    dc.pipe->GetSize() >= dc.pause_chunk_limit) {
++				cmd = NeedChunks(dc, lock);
++				continue;
++			}
++		}
++
+ 		current_chunk = dc.buffer->Allocate();
+ 		if (current_chunk != nullptr) {
+ 			current_chunk->replay_gain_serial = replay_gain_serial;
+--- a/src/player/Thread.cxx	2026-10-03 21:48:57.507434810 +0000
++++ b/src/player/Thread.cxx	2026-10-03 21:49:07.010639242 +0000
+@@ -1114,6 +1114,7 @@
+ 
+ 	std::unique_lock lock{pc.mutex};
+ 
++	dc.pause_chunk_limit = 0;
+ 	StartDecoder(lock, pipe, true);
+ 	ActivateDecoder();
+ 
+@@ -1122,6 +1123,20 @@
+ 	pc.CommandFinished();
+ 
+ 	while (ProcessCommand(lock)) {
++		{
++			/* erosq: cap the decoded read-ahead while
++			   paused (~1 s of audio); lift it and wake the
++			   decoder as soon as playback resumes */
++			const unsigned limit = paused && !decoder_starting
++				? (buffer_before_play > 16U ? buffer_before_play : 16U)
++				: 0U;
++			if (dc.pause_chunk_limit != limit) {
++				dc.pause_chunk_limit = limit;
++				if (limit == 0)
++					dc.Signal();
++			}
++		}
++
+ 		if (decoder_starting) {
+ 			/* wait until the decoder is initialized completely */
+ 

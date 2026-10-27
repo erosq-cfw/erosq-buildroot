@@ -1,0 +1,50 @@
+From: erosqcfw <erosqcfw@gmail.com>
+Subject: [PATCH] MusicChunk: 16 KiB chunks (4x fewer player/decoder wakeups)
+
+Every full MusicChunk makes the decoder thread signal the player thread
+(DecoderBridge::FlushChunk -> client_cond), and the player wakes, moves
+the chunk towards the outputs and sleeps again.  With 4 KiB chunks a
+44.1 kHz/16-bit stream does that ~45x/s (~90x/s for 24-bit), each a pair
+of context switches that also preempts the decoder on this single-core
+X1000.  16 KiB chunks cut system context switches during wired FLAC
+playback ~60% (EROS Q, measured 5500-7000 -> ~2450 per 30 s).
+
+The pipe still holds the same number of bytes (audio_buffer_size is
+divided by CHUNK_SIZE), so RAM use does not change.  Two chunk-count
+thresholds are kept in bytes: the player's output-pipe high-water mark
+(64 chunks = 256 KiB at 4 KiB -> 64 * 4096 / CHUNK_SIZE) and the erosq
+paused read-ahead floor from 0002 (16 chunks = 64 KiB -> 64 KiB /
+CHUNK_SIZE).
+
+---
+--- a/src/MusicChunk.hxx
++++ b/src/MusicChunk.hxx
+@@ -17,7 +17,7 @@
+ #include <memory>
+ #include <span>
+ 
+-static constexpr size_t CHUNK_SIZE = 4096;
++static constexpr size_t CHUNK_SIZE = 16384;
+ 
+ struct AudioFormat;
+ struct Tag;
+--- a/src/player/Thread.cxx
++++ b/src/player/Thread.cxx
+@@ -950,7 +950,7 @@
+ inline bool
+ Player::PlayNextChunk() noexcept
+ {
+-	if (!pc.LockWaitOutputConsumed(64))
++	if (!pc.LockWaitOutputConsumed(64 * 4096 / CHUNK_SIZE))
+ 		/* the output pipe is still large enough, don't send
+ 		   another chunk */
+ 		return true;
+@@ -1128,7 +1128,7 @@
+ 			   paused (~1 s of audio); lift it and wake the
+ 			   decoder as soon as playback resumes */
+ 			const unsigned limit = paused && !decoder_starting
+-				? (buffer_before_play > 16U ? buffer_before_play : 16U)
++				? std::max(buffer_before_play, unsigned(64 * 1024 / CHUNK_SIZE))
+ 				: 0U;
+ 			if (dc.pause_chunk_limit != limit) {
+ 				dc.pause_chunk_limit = limit;

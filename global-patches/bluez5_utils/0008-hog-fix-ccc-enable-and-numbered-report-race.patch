@@ -1,0 +1,60 @@
+hog-lib: fix input-report delivery over HoG (BLE gamepads)
+
+Two bugs found HITL against an 8BitDo Ultimate 2 Wireless (HW-verified
+2026-07-13); both break ALL button input from BLE HoG gamepads:
+
+1. CCC enable: report_reference_cb read the CCC descriptor before writing
+   it (ccc_read_cb), but that read silently never completes against this
+   pad (no ATT error, no callback), so notifications were never enabled.
+   The read result is discarded by ccc_read_cb anyway -- write the CCC
+   directly.
+
+2. Numbered-report race: on cached-db reconnects uhid_create() runs early
+   (report map from gatt_db cache), so the kernel's UHID_START dev_flags
+   arrive before the Report Reference descriptors are read.  start_flags'
+   set_numbered pass then sees report->type==0 and never sets
+   report->numbered, so reports are injected into /dev/uhid WITHOUT the
+   report-id prefix byte and hid-core silently drops every one.
+   Re-apply set_numbered once the type is known.
+
+Upstream 5.79; applies on top of 0005/0007.
+
+--- a/profiles/input/hog-lib.c
++++ b/profiles/input/hog-lib.c
+@@ -320,6 +320,8 @@
+ 	}
+ }
+ 
++static void set_numbered(void *data, void *user_data);
++
+ static void report_value_cb(const guint8 *pdu, guint16 len, gpointer user_data)
+ {
+ 	struct report *report = user_data;
+@@ -447,10 +449,23 @@
+ 	DBG("Report 0x%04x: id 0x%02x type %s", report->value_handle,
+ 				report->id, type_to_string(report->type));
+ 
+-	/* Enable notifications only for Input Reports */
+-	if (report->type == HOG_REPORT_TYPE_INPUT)
+-		read_char(report->hog, report->hog->attrib, report->ccc_handle,
+-							ccc_read_cb, report);
++	/* erosq: on cached-reconnect uhid is created (and UHID_START's
++	 * dev_flags arrive) before report types are known, so start_flags'
++	 * set_numbered pass saw type==0 and never numbered this report.
++	 * Re-apply now that the type is known. */
++	if (report->hog->uhid_flags)
++		set_numbered(report, report->hog);
++
++	/* Enable notifications only for Input Reports.
++	 * erosq: write the CCC directly. The read-before-write (ccc_read_cb)
++	 * never completes against the 8BitDo Ultimate 2 (silent stall, no ATT
++	 * error), and ccc_read_cb discards the value anyway. */
++	if (report->type == HOG_REPORT_TYPE_INPUT) {
++		DBG("Writing CCC 0x%04x directly (read-before-write skipped)",
++							report->ccc_handle);
++		write_ccc(report->hog, report->hog->attrib,
++						report->ccc_handle, report);
++	}
+ 
+ remove:
+ 	remove_gatt_req(req, status);

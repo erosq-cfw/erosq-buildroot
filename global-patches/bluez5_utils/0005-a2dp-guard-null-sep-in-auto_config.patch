@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: erosqcfw <erosqcfw@gmail.com>
+Date: Wed, 1 Jul 2026 20:45:00 +0000
+Subject: [PATCH BlueZ] a2dp: guard NULL setup->sep/session in auto_config()
+
+bluetoothd SIGSEGVs when connecting some A2DP sinks (reproduced with a UE
+MEGABOOM). Two racing-teardown variants, both fixed here:
+
+1. read @0x14 (struct a2dp_sep .stream): select_cb() nulls setup->sep via
+   queue_pop_head(setup->eps) when no valid config can be selected; a racing
+   async SetConfiguration reply then reaches auto_config() via
+   endpoint_setconf_cb() with setup->sep already NULL.
+
+2. read @0x450 (struct avdtp .in_cmd.transaction): remove_channel() finalizes
+   the pending setup with -ENOTCONN (setup->err set) and NULLs setup->session
+   when the A2DP channel drops mid-config; a pending g_idle_add(auto_config)
+   then passes the sep guard, takes the err!=NULL -> goto done path (skipping
+   the avdtp_get_device(setup->session) deref) and calls
+   setup->setconf_cb(setup->session=NULL, ...) -> avdtp setconf_cb()
+   dereferences session->in_cmd.transaction -> crash.
+
+Either way bluetoothd crash-loops (respawned by the UI's org.bluez name
+watch), pinning CPU + churning RAM. Treat a NULL sep OR session like the
+existing "configuration aborted" case (stream==NULL): abort cleanly.
+setup->session is already assumed nullable elsewhere (a2dp_setup_get_device
+null-checks it).
+
+The abort path must also drop auto_config()'s setup reference: both callers
+hand it one ref that only the setup_unref() at the tail of the normal path
+releases (endpoint_setconf_ind's a2dp_setup_get() ref on the
+g_idle_add(auto_config) path; the extra setup_ref() passed through
+endpoint->set_configuration() on the endpoint_setconf_cb() path -- that
+callback's own unref only balances the a2dp_setup_get() ref). Without the
+unref the aborted setup stays in the module-global setups list forever.
+Upstream's narrower stream==NULL early return has the same latent leak; the
+widened guard makes it reachable in practice, so release the ref here.
+
+
+Rebased onto 5.86: auto_config() now calls avdtp_get_device(session) and
+reads setup->sep->type BEFORE any abort check, and aborts on a missing
+stream via queue_find(sep->streams) instead of sep->stream. So the guard
+moves to the top (sep/session only), and the two new upstream early
+returns (no btd service, stream not found) get the same setup_unref() --
+both callers still hand auto_config() one ref.
+
+Signed-off-by: erosqcfw <erosqcfw@gmail.com>
+---
+ profiles/audio/a2dp.c
+
+diff --git a/profiles/audio/a2dp.c b/profiles/audio/a2dp.c
+--- a/profiles/audio/a2dp.c
++++ b/profiles/audio/a2dp.c
+@@ -718,6 +718,19 @@
+ 	struct btd_service *service;
+ 	struct a2dp_stream *stream;
+ 
++	/* setup->sep can be NULL: the per-session setup is shared, and
++	 * select_cb() nulls it via queue_pop_head(setup->eps) when no valid
++	 * config can be selected. setup->session can be NULL too:
++	 * remove_channel() NULLs it (with setup->err set) when the channel
++	 * drops mid-config, and a pending g_idle_add(auto_config) then reaches
++	 * setconf_cb() with a NULL session -> crash. Seen connecting to some
++	 * A2DP sinks (e.g. UE MEGABOOM). Abort cleanly, releasing the ref the
++	 * tail of the normal path would have dropped. */
++	if (setup->sep == NULL || setup->session == NULL) {
++		setup_unref(setup);
++		return FALSE;
++	}
++
+ 	dev = avdtp_get_device(setup->session);
+ 
+ 	if (setup->sep->type == AVDTP_SEP_TYPE_SOURCE)
+@@ -727,13 +740,16 @@
+ 
+ 	if (service == NULL) {
+ 		error("Unable to find btd service");
++		setup_unref(setup);
+ 		return FALSE;
+ 	}
+ 
+ 	/* Check if configuration was aborted */
+ 	stream = queue_find(setup->sep->streams, match_stream, setup->stream);
+-	if (!stream)
++	if (!stream) {
++		setup_unref(setup);
+ 		return FALSE;
++	}
+ 
+ 	if (setup->err != NULL)
+ 		goto done;

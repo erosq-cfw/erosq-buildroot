@@ -1,0 +1,6 @@
+config BR2_PACKAGE_LIBTINYALSA
+	bool "libtinyalsa"
+	help
+	  tinyalsa 1.1.1 (pinned). The on-device 2.x release cannot set the
+	  EROS Q ES9018K2M 2-value volume control, so this stays at 1.1.1.
+	  Static library, consumed by erosq-ui.

@@ -1,0 +1,11 @@
+#!/bin/sh
+rf=""
+for r in /sys/class/rfkill/rfkill*; do
+	case "$(cat "$r/name" 2>/dev/null)" in phy*) rf="$r"; break;; esac
+done
+[ -z "$rf" ] && { echo "no phy rfkill (load wifi first)"; exit 1; }
+case "$1" in
+	off) echo 1 > "$rf/soft" && echo "wifi radio DISABLED" || { echo "wifirf: write failed"; exit 1; };;
+	on)  echo 0 > "$rf/soft" && echo "wifi radio ENABLED"  || { echo "wifirf: write failed"; exit 1; };;
+	*)   s=$(cat "$rf/soft"); [ "$s" = 0 ] && echo "radio enabled" || echo "radio disabled";;
+esac

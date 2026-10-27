@@ -1,0 +1,26 @@
+#!/bin/sh
+# mdev hotplug handler for the SD music card. mdev exports ACTION + MDEV.
+export MPD_HOST=/run/mpd.sock
+RESUME=/run/sd-resume
+case "$ACTION" in
+	add)
+		/usr/sbin/sd-mount && mpc update ;;
+	remove)
+		# Stop on the song that was playing, and remember where, BEFORE MPD
+		# drains its buffer and hits the read error: its error handling skips
+		# to the next song (and the next...), so Play after the reinsert
+		# started the wrong track from 0:00 (HITL 10-21). erosq-ui's Play
+		# resumes from $RESUME. mdev sends two removes (disk + partition) and
+		# runs them in turn; the second finds MPD stopped and keeps the record.
+		case "$(mpc status '%state%' 2>/dev/null)" in
+		playing|paused)
+			id=$(mpc current -f '%id%' 2>/dev/null)
+			t=$(mpc status '%currenttime%' 2>/dev/null)     # m:ss
+			s=${t#*:}; s=${s#0}
+			[ -n "$id" ] && echo "$id $(( ${t%:*} * 60 + s ))" > "$RESUME"
+			mpc -q stop ;;
+		esac
+		umount -l /media/sd 2>/dev/null
+		mpc update ;;
+esac
+exit 0

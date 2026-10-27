@@ -1,0 +1,8 @@
+config BR2_PACKAGE_EROSQ_UI
+	bool "erosq-ui"
+	select BR2_PACKAGE_LIBDRM
+	select BR2_PACKAGE_LIBTINYALSA
+	help
+	  EROS Q LVGL front-end (menu/wheel/battery/WiFi/BT/audio UI).
+	  LVGL is vendored in-source; links Buildroot libdrm (shared) and
+	  the pinned libtinyalsa 1.1.1 (static).

@@ -1,0 +1,12 @@
+#!/bin/sh
+# DEPRECATED: superseded by S05mounts under the RO-squashfs / SPI-NAND layout.
+#
+# Previously this mounted the eMMC music partition (mmcblk0p3) at /data. With the
+# read-only squashfs root, /data is now the writable `sysdata` UBIFS system-state
+# volume (mounted by S05mounts), and music lives on the SD card at /media/sd
+# (also mounted by S05mounts). Kept as a no-op so rcS ordering is unchanged.
+case "$1" in
+	start) ;;
+	stop)  ;;
+	*) echo "Usage: $0 {start|stop}"; exit 1 ;;
+esac

@@ -1,0 +1,33 @@
+#!/bin/sh
+# Launch erosq-ui as the sole DRM master (card0 from the built-in erosq-drm). Splash is the FALLBACK
+# if erosq-ui fails to start — matches the verified boot behavior (straight to UI).
+# erosq-uilaunch = `erosq-ui || erosq-splash` without a resident busybox sh (52 -> ~8-12 kB anon):
+# non-zero exit / any fatal signal / exec failure -> splash exec'd in the launcher's pid.
+case "$1" in
+	start)
+		if [ -x /usr/bin/erosq-ui ]; then
+			setsid /usr/sbin/erosq-uilaunch >/dev/null 2>&1 &
+		elif [ -x /sbin/erosq-splash ]; then
+			setsid /sbin/erosq-splash >/dev/null 2>&1 &
+		fi
+		;;
+	stop)
+		# Launcher FIRST: it exec()s the splash in its own pid the moment erosq-ui
+		# dies, and that splash keeps DRM master -> the next game/bench fails with
+		# "setcrtc: Permission denied". Then UI + splash; re-kill until none is
+		# left (an exec can land between kills), SIGKILL after ~5 s.
+		killall erosq-uilaunch 2>/dev/null
+		killall erosq-ui erosq-splash 2>/dev/null
+		i=0
+		while pidof erosq-uilaunch erosq-ui erosq-splash >/dev/null; do
+			i=$((i+1))
+			if [ $i -gt 5 ]; then
+				killall -9 erosq-uilaunch erosq-ui erosq-splash 2>/dev/null
+				break
+			fi
+			sleep 1
+			killall erosq-uilaunch erosq-ui erosq-splash 2>/dev/null
+		done
+		true ;;
+	*) echo "Usage: $0 {start|stop}"; exit 1 ;;
+esac

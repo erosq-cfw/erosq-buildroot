@@ -1,0 +1,97 @@
+#!/bin/sh
+# Mount policy for the read-only squashfs root (SPI-NAND/UBI).
+#
+# The root filesystem is a RO squashfs. ALL persistent runtime state lives on
+# the writable `sysdata` UBIFS volume mounted here at /data. The kernel attaches
+# ubi0 at boot from the `ubi.mtd=3` cmdline arg, so ubi0:sysdata exists by now.
+#
+# Ephemeral state (/tmp /run /var) is tmpfs (see /etc/fstab + busybox mount -a).
+# Persistent paths under / are baked as symlinks into /data (post-build.sh); this
+# script creates their /data targets on first boot, before any daemon starts.
+case "$1" in
+	start)
+		# --- sysdata (UBIFS) -> /data : the NAND system-state volume ---
+		# sysdata is vol2 of the on-NAND UBI, baked (pre-formatted) at flash
+		# time. The kernel attaches ubi0 from ubi.mtd=3, but volume enumeration
+		# can lag a moment after rcS starts -- wait for it before concluding it
+		# is missing. RECREATING sysdata WIPES all persistent state, so we must
+		# never do that on a transient attach miss, and never reformat a volume
+		# that exists but won't mount (treat that as corruption to inspect, not
+		# to silently wipe).
+		mkdir -p /data
+		i=0
+		while [ $i -lt 10 ] && ! ubinfo /dev/ubi0 -N sysdata >/dev/null 2>&1; do
+			i=$((i + 1)); sleep 1
+		done
+		# noatime: this is the only writable NAND volume. Every read under /data
+		# (bluetooth keys, mpd playlists, wpa conf, logs) would otherwise dirty an
+		# inode with an access-time update -> a real flash write, burning erase
+		# cycles and power for a timestamp nothing here reads. (SD already mounts
+		# noatime in sd-mount; squashfs root is RO/atime-less.)
+		if ! mount -t ubifs -o noatime ubi0:sysdata /data 2>/dev/null; then
+			if ubinfo /dev/ubi0 -N sysdata >/dev/null 2>&1; then
+				# Volume present but unmountable -> do NOT reformat (would wipe
+				# state); surface it so a real corruption/fsck issue is visible.
+				echo "S05mounts: WARN sysdata present but unmountable; state is volatile"
+			else
+				# Genuinely absent after waiting: true first boot / fresh NAND.
+				# Create it from free UBI space (loudly -- should be rare).
+				echo "S05mounts: sysdata volume absent; creating it (first boot / fresh NAND)"
+				ubimkvol /dev/ubi0 -N sysdata -m || echo "S05mounts: ERROR ubimkvol failed"
+				mount -t ubifs -o noatime ubi0:sysdata /data 2>/dev/null || \
+					echo "S05mounts: WARN could not mount fresh sysdata; state is volatile"
+			fi
+		fi
+
+		# Persistent-state target dirs (symlinked from / at build time).
+		mkdir -p /data/etc/dropbear \
+		         /data/root/.ssh \
+		         /data/lib/bluetooth \
+		         /data/lib/mpd/playlists \
+		         /data/lib/seedrng \
+		         /data/etc/wpa_supplicant \
+		         /data/log
+		# dropbear ignores authorized_keys unless ~/.ssh is 0700 (and the
+		# file 0600). /root/.ssh links here; the image ships no keys.
+		chmod 0700 /data/root/.ssh
+		# private builds: seed root's keys once so an update can't lock out SSH
+		/usr/sbin/erosq-ssh-seed
+
+		# Seed wpa_supplicant.conf from the RO skeleton on first boot. This is
+		# the file wpa_supplicant runs with (-c, wifi_up.sh); /etc's symlink to
+		# it is only for humans. Also
+		# migrate any pre-2026-07-12 conf: those were Buildroot's stock sample —
+		# no update_config=1 (so SAVE_CONFIG failed and no user networks can be
+		# in there) AND a wildcard open network that auto-joined ANY open AP.
+		# Mode 600: it holds the saved PSKs, and SAVE_CONFIG keeps the existing
+		# mode (it ORs in u+rw), so a 644 seed would stay world-readable forever.
+		grep -q '^update_config=1' /data/etc/wpa_supplicant.conf 2>/dev/null || \
+			(umask 077; cp /etc/wpa_supplicant.conf.default /data/etc/wpa_supplicant.conf 2>/dev/null)
+		chmod 600 /data/etc/wpa_supplicant.conf 2>/dev/null
+
+		# Seed the persistent machine-id (/etc/machine-id is a symlink here;
+		# dbus needs it and the RO root made its own write fail every boot).
+		[ -s /data/etc/machine-id ] || \
+			dbus-uuidgen > /data/etc/machine-id 2>/dev/null || true
+
+		# Resume where the user left off: mpd-persist (power-off path) saved
+		# /run/mpd.state here. Hand it back to mpd (state_file on tmpfs) with
+		#   play -> pause        : never power on blaring; Play resumes in place
+		#   audio_device_state   : dropped, so the DAC is the enabled output
+		#                          (a BT-active shutdown would restore DAC off).
+		# Kept on /data (not consumed) so a later hard power-cut still resumes
+		# from the last graceful shutdown.
+		[ -s /data/mpd.state ] && \
+			sed -e 's/^state: play$/state: pause/' -e '/^audio_device_state:/d' \
+				/data/mpd.state > /run/mpd.state 2>/dev/null
+
+		# --- SD card (music) -> /media/sd (shared helper, see sd-hotplug) ---
+		/usr/sbin/sd-mount || true
+		;;
+	stop)
+		umount /media/sd 2>/dev/null || true
+		umount /data 2>/dev/null || true
+		;;
+	*)
+		echo "Usage: $0 {start|stop}"; exit 1 ;;
+esac

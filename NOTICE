@@ -1,0 +1,36 @@
+Licensing
+=========
+
+This repository is a Buildroot external tree (BR2_EXTERNAL). Our own files
+(package recipes, board scripts, init scripts, tools, tests and docs) are
+MIT-licensed; see LICENSE. The exceptions below keep their own licences.
+
+Buildroot
+    Buildroot itself is not included. It is GPL-2.0-or-later
+    (https://buildroot.org). The patches against Buildroot in
+    patches/buildroot/ are distributed under GPL-2.0, like Buildroot.
+
+Patches to third-party packages
+    Each patch is a derivative of the package it applies to and is
+    distributed under that package's licence:
+      global-patches/bluez5_utils/      BlueZ          GPL-2.0-or-later
+      global-patches/mpd/               Music Player Daemon  GPL-2.0-or-later
+      global-patches/wpa_supplicant/    wpa_supplicant BSD-3-Clause
+      package/libtinyalsa/*.patch       tinyalsa       BSD-3-Clause
+      package/erosq-ui/lvgl-patches/    LVGL           MIT
+
+Downloaded at build time (not in this repository)
+    tinyalsa 1.1.1 (BSD-3-Clause), ldacBT 2.0.2.6 (Apache-2.0), and the
+    packages Buildroot fetches, each under its own licence. `make legal-info`
+    lists them for a given configuration.
+
+Wi-Fi and Bluetooth chip firmware
+    The CYW43438 Wi-Fi firmware, its NVRAM file and the Bluetooth patchram are
+    proprietary and are NOT in this repository. The build extracts them from
+    the stock EROS Q firmware that you supply (see README.md). An image built
+    that way contains those proprietary files; check their terms before you
+    redistribute it.
+
+Trademarks
+    EROS Q is a product name of its respective owner. This project is not
+    affiliated with or endorsed by the device maker.

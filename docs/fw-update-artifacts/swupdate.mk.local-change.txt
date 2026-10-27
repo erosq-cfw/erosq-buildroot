@@ -1,0 +1,4 @@
+# swupdate.mk local change (Buildroot gap: HAVE_LIBUBOOTENV never set -> CONFIG_UBOOT dropped)
+# Applied to buildroot-2026.05/package/swupdate/swupdate.mk after the SWUPDATE_MAKE_ENV = line:
+# erosq: Buildroot omits these env-driven Kconfig flags, so CONFIG_UBOOT
+# (depends on HAVE_LIBUBOOTENV) and the ubivol handler get dropped by olddefconfig.

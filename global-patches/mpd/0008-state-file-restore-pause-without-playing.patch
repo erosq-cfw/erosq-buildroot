@@ -1,0 +1,107 @@
+From: erosqcfw <erosqcfw@gmail.com>
+Subject: [PATCH] state file: restore a paused song paused, without playing it
+
+The state file restore of "state: pause" seeks to the saved time,
+which starts PLAYING the song, and only then sends PAUSE.  On the
+single-core X1000 the player thread usually wins that race: it opens
+the ALSA output and plays from the saved time until the pause lands,
+so the restored position is later than the saved one (je2d TEST-PLAN
+5.1: 2:04 -> 2:05; every power cycle adds to it) and a blip of audio
+can reach the outputs at boot.  Reproduced on the host with MPD pinned
+to one CPU (taskset -c 0): +0.97 s on one restore.
+
+Let the restore ask the player to start paused: the decoder starts and
+seeks, but no output is opened until the user presses Play.
+
+---
+--- a/src/player/Control.cxx	2026-10-26 18:21:30.809640954 +0000
++++ b/src/player/Control.cxx	2026-10-26 18:21:30.974501558 +0000
+@@ -145,6 +145,13 @@
+ 	border_pause = _border_pause;
+ }
+ 
++void
++PlayerControl::LockSetStartPaused(bool _start_paused) noexcept
++{
++	const std::lock_guard protect{mutex};
++	start_paused = _start_paused;
++}
++
+ PlayerStatus
+ PlayerControl::LockGetStatus() noexcept
+ {
+--- a/src/player/Control.hxx	2026-10-26 18:21:30.778678057 +0000
++++ b/src/player/Control.hxx	2026-10-26 18:21:30.974198981 +0000
+@@ -177,6 +177,18 @@
+ 	bool border_pause = false;
+ 
+ 	/**
++	 * erosq: if set, the next playback the player thread starts
++	 * (PLAY/SEEK while stopped) starts in PAUSE state: the decoder
++	 * starts and seeks, but no output is opened and nothing is
++	 * played.  Used by the state file restore of a "pause" state,
++	 * which otherwise plays the song from the saved time and
++	 * pauses it a moment later -- the audio consumed in between
++	 * (up to the ALSA buffer) moved the saved position forward on
++	 * every boot.  Consumed (reset) by the player thread.
++	 */
++	bool start_paused = false;
++
++	/**
+ 	 * If this flag is set, then the player thread is currently
+ 	 * occupied and will not be able to respond quickly to
+ 	 * commands (e.g. waiting for the decoder thread to finish
+@@ -274,6 +286,11 @@
+ 	 * Set the player's #border_pause flag.
+ 	 */
+ 	void LockSetBorderPause(bool border_pause) noexcept;
++
++	/**
++	 * erosq: set the #start_paused flag.
++	 */
++	void LockSetStartPaused(bool _start_paused) noexcept;
+ 	void SetCrossFade(FloatDuration duration) noexcept;
+ 
+ 	auto GetCrossFade() const noexcept {
+--- a/src/player/Thread.cxx	2026-10-26 18:21:30.816909942 +0000
++++ b/src/player/Thread.cxx	2026-10-26 18:21:30.974826823 +0000
+@@ -1118,7 +1118,11 @@
+ 	StartDecoder(lock, pipe, true);
+ 	ActivateDecoder();
+ 
+-	pc.state = PlayerState::PLAY;
++	/* erosq: a restored "pause" state starts paused, without
++	   opening the outputs (see PlayerControl::start_paused) */
++	paused = pc.start_paused;
++	pc.start_paused = false;
++	pc.state = paused ? PlayerState::PAUSE : PlayerState::PLAY;
+ 
+ 	pc.CommandFinished();
+ 
+--- a/src/queue/PlaylistState.cxx	2026-10-26 18:21:30.856505639 +0000
++++ b/src/queue/PlaylistState.cxx	2026-10-26 18:21:30.976183826 +0000
+@@ -189,6 +189,12 @@
+ 		if (state != PlayerState::STOP)
+ 			pc.LockUpdateAudio();
+ 
++		/* erosq: start a restored "pause" state paused instead
++		   of playing it and pausing a moment later, which played
++		   (and skipped) up to an ALSA buffer of audio */
++		if (state == PlayerState::PAUSE)
++			pc.LockSetStartPaused(true);
++
+ 		if (state == PlayerState::STOP /* && config_option */)
+ 			playlist.current = current;
+ 		else if (seek_time.count() == 0) {
+@@ -206,8 +212,10 @@
+ 			}
+ 		}
+ 
++		/* erosq: the player started paused (start_paused);
++		   only clear the flag in case no playback started */
+ 		if (state == PlayerState::PAUSE)
+-			pc.LockPause();
++			pc.LockSetStartPaused(false);
+ 	}
+ 
+ 	return true;

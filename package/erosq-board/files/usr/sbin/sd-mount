@@ -1,0 +1,16 @@
+#!/bin/sh
+# Mount the SD music card at /media/sd. Idempotent: exit 0 if already mounted.
+mkdir -p /media/sd
+grep -q ' /media/sd ' /proc/mounts && exit 0
+for dev in /dev/mmcblk0p3 /dev/mmcblk0p1 /dev/mmcblk0; do
+	[ -b "$dev" ] || continue
+	# noatime: nothing on-device writes to the card; don't dirty FAT with
+	# access-time updates a yanked card would then carry as corruption risk.
+	# usefree: trust the FAT32 FSInfo free count. Without it the first statfs
+	# after mount (About's "Free space", df) makes vfat scan the whole FAT --
+	# 57 MiB on a 462 GB card, ~22 s of UI freeze. vfat-only option, so retry
+	# plain for exFAT/ext4 cards.
+	mount -o noatime,usefree "$dev" /media/sd 2>/dev/null && exit 0
+	mount -o noatime "$dev" /media/sd 2>/dev/null && exit 0
+done
+exit 1

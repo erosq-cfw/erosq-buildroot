@@ -1,0 +1,27 @@
+#!/bin/sh
+# On a fresh DHCP lease, set the clock from NTP once and save it to the RTC.
+#
+# The X1000 RTC loses its time whenever the backup supply drops, and nothing
+# else sets it (the UI only picks a timezone), so the device came up in 1970.
+# The kernel's hctosys reads the RTC at boot, so one good write here keeps
+# the time across reboots and offline use. RTC is kept in UTC (-u), matching
+# hctosys.
+#
+# Backgrounded: udhcpc waits for its hooks, and an unreachable pool must not
+# hold up WiFi bring-up. Busybox has no `timeout`, so we bound ntpd ourselves.
+case "$1" in bound|renew) ;; *) exit 0 ;; esac
+
+LOCK=/run/ntp-rtc.lock
+mkdir "$LOCK" 2>/dev/null || exit 0     # a sync is already running
+(
+	trap 'rmdir "$LOCK"' EXIT
+	ntpd -n -q -p pool.ntp.org >/dev/null 2>&1 &
+	pid=$!
+	i=0
+	while kill -0 "$pid" 2>/dev/null; do
+		[ $i -ge 30 ] && { kill "$pid" 2>/dev/null; exit 0; }
+		sleep 1; i=$((i+1))
+	done
+	wait "$pid" && hwclock -w -u
+) </dev/null >/dev/null 2>&1 &
+exit 0

@@ -1,0 +1,52 @@
+config BR2_PACKAGE_EROSQ_BOARD
+	bool "erosq-board"
+	# erosq-ui runs "mpdctl stop" before an update
+	select BR2_PACKAGE_MPDCTL
+	# S90erosq-ui / erosq-uilaunch fall back to /sbin/erosq-splash
+	select BR2_PACKAGE_EROSQ_SPLASH
+	# /lib/firmware/regulatory.db{,.p7s} for cfg80211
+	select BR2_PACKAGE_WIRELESS_REGDB
+	help
+	  EROS Q board support: the WiFi/BT chip firmware (extracted
+	  from the stock firmware at build time), the device bring-up
+	  scripts (bt_*, wifi_*), and the boot splash image (the
+	  erosq-splash binary comes from package/erosq-splash).
+
+if BR2_PACKAGE_EROSQ_BOARD
+
+config BR2_PACKAGE_EROSQ_BOARD_STOCK_FW
+	string "stock firmware for the WiFi/BT chip blobs"
+	help
+	  The CYW43438 WiFi firmware, its NVRAM and the BT patchram are
+	  not redistributable, so they are taken from the stock EROS Q
+	  firmware at build time: the stock update file
+	  update_erosQ_v2.2-rbuninstall.upt, its SYSTEM.UBI, or an
+	  extracted stock rootfs directory. A .upt or SYSTEM.UBI needs
+	  ubi_reader on the host (pip install ubi_reader).
+
+	  Empty = the first *.upt in $(BR2_EXTERNAL_EROSQ_PATH)/stock/
+	  (gitignored). The build stops if none is found or the files
+	  don't match the pinned sha256 sums.
+
+config BR2_PACKAGE_EROSQ_BOARD_SWU_PUBKEY
+	string "swupdate public key (self-signed builds)"
+	help
+	  PEM public key installed as /etc/swupdate/public.pem; the
+	  device only installs .swu bundles signed by the matching
+	  private key (see docs/fw-update-artifacts/mk-erosq-swu.sh
+	  --key).
+
+	  Empty = the project's official release key, so the image
+	  accepts official releases only.
+
+config BR2_PACKAGE_EROSQ_BOARD_SEED_AUTHORIZED_KEYS
+	string "root SSH keys to seed on first boot (private builds)"
+	help
+	  Path to an authorized_keys file kept OUTSIDE this repository
+	  (or under the gitignored private/ directory). It is installed
+	  as /usr/share/erosq/seed-authorized_keys, and on boot
+	  erosq-ssh-seed copies it ONCE to /data/root/.ssh/authorized_keys
+	  if that file does not exist yet, so an update cannot lock out
+	  SSH. Leave empty for public builds: nothing is seeded.
+
+endif

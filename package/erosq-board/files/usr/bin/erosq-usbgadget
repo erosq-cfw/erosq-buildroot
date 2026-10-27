@@ -1,0 +1,158 @@
+#!/bin/sh
+# EROS Q USB composite gadget (configfs). ONE always-on gadget = CDC-ECM network
+# (usb0, the dev/ssh path) + a mass-storage LUN. "USB file transfer mode" only
+# TOGGLES THE LUN'S BACKING FILE -- the network is never torn down, so a live
+# ssh-over-usb0 survives the switch. Requires CONFIG_USB_ETH=n (no legacy g_ether
+# grabbing the UDC) + the configfs functions (kernel 32db331984+).
+#
+#   erosq-usbgadget net        compose + bind + bring up usb0   (boot; idempotent)
+#   erosq-usbgadget storage    file-transfer mode: stop mpd, unmount SD, expose it
+#   erosq-usbgadget network    back to network-only: hide SD, remount, restart mpd
+#   erosq-usbgadget status     -> "network" | "storage"
+set -u
+G=/sys/kernel/config/usb_gadget/erosq
+UDC=13500000.usb
+SDDEV=/dev/mmcblk0          # whole card exposed to the host as a removable drive
+SDMNT=/media/sd
+IFACE=usb0
+IPADDR=192.168.7.1
+LUN="$G/functions/mass_storage.0/lun.0/file"
+
+log() { echo "erosq-usbgadget: $*"; }
+
+# Reliably stop the mpd daemon so nothing holds the SD. S95mpd's
+# start-stop-daemon --exec match is unreliable here (no pidfile at stop time ->
+# "none killed"), so fall back to killall and WAIT for it to actually exit.
+# (Deliberately NOT `fuser -km`: busybox fuser -m lists almost every PID here,
+# so -k would kill init.)
+stop_mpd() {
+	# Do NOT call `/etc/init.d/S95mpd stop`: its `start-stop-daemon --stop --exec
+	# /usr/bin/mpd` match is unreliable under musl (fails to match the daemon), and
+	# the script then spins FOREVER in `while [ -f pidfile ]` on a daemon it never
+	# signalled -- that deadlock froze entry to storage mode. Kill mpd directly,
+	# wait for it to actually exit (escalate to -9), and clear any stale pidfile so
+	# the later S95mpd start comes up clean.
+	killall mpd 2>/dev/null
+	i=0
+	while pidof mpd >/dev/null 2>&1; do
+		i=$((i+1))
+		[ $i -ge 8 ]  && killall -9 mpd 2>/dev/null
+		[ $i -ge 12 ] && { log "WARN: mpd still up after 12s"; break; }
+		sleep 1
+	done
+	rm -f /var/run/mpd.pid /run/mpd.pid 2>/dev/null
+}
+
+bound() { [ -e "$G/UDC" ] && [ -n "$(cat "$G/UDC" 2>/dev/null)" ]; }
+
+compose() {
+	grep -q configfs /proc/mounts 2>/dev/null || mount -t configfs none /sys/kernel/config
+	bound && return 0
+	mkdir -p "$G" || { log "mkdir gadget failed"; return 1; }
+	echo 0x1d6b > "$G/idVendor"      # Linux Foundation
+	echo 0x0104 > "$G/idProduct"     # Multifunction Composite Gadget
+	echo 0x0100 > "$G/bcdDevice"
+	echo 0x0200 > "$G/bcdUSB"
+	# Misc/IAD device class so a multi-function (ECM + mass_storage) composite
+	# enumerates on strict hosts. Windows has no CDC-ECM driver, so without the
+	# Interface Association Descriptor it can reject the whole config and the SD
+	# never appears. (Linux hosts are lenient -- why HITL missed this.)
+	echo 0xEF > "$G/bDeviceClass"
+	echo 0x02 > "$G/bDeviceSubClass"
+	echo 0x01 > "$G/bDeviceProtocol"
+	mkdir -p "$G/strings/0x409"
+	echo "EROSQ0001" > "$G/strings/0x409/serialnumber"
+	echo "EROS Q"    > "$G/strings/0x409/manufacturer"
+	echo "EROS Q"    > "$G/strings/0x409/product"
+	# CDC-ECM ethernet. Fixed locally-administered MACs so the host sees a
+	# stable device across boots (legacy g_ether re-randomised every boot).
+	mkdir -p "$G/functions/ecm.usb0"
+	echo "02:e0:4c:00:00:01" > "$G/functions/ecm.usb0/dev_addr"
+	echo "02:e0:4c:00:00:02" > "$G/functions/ecm.usb0/host_addr"
+	# Mass storage: removable LUN, backing file EMPTY = "no media" until toggled.
+	mkdir -p "$G/functions/mass_storage.0"
+	echo 1 > "$G/functions/mass_storage.0/lun.0/removable"
+	echo 0 > "$G/functions/mass_storage.0/lun.0/ro" 2>/dev/null || true
+	mkdir -p "$G/configs/c.1/strings/0x409"
+	echo "EROS Q ECM + storage" > "$G/configs/c.1/strings/0x409/configuration"
+	echo 250 > "$G/configs/c.1/MaxPower" 2>/dev/null || true
+	ln -sf "$G/functions/ecm.usb0"       "$G/configs/c.1/" 2>/dev/null
+	ln -sf "$G/functions/mass_storage.0" "$G/configs/c.1/" 2>/dev/null
+	# bind (retry: the dwc2 UDC registers very early but be forgiving)
+	i=0
+	until echo "$UDC" > "$G/UDC" 2>/dev/null; do
+		i=$((i+1)); [ $i -ge 10 ] && { log "UDC bind FAILED (udc=$(ls /sys/class/udc 2>/dev/null))"; return 1; }
+		sleep 1
+	done
+	log "gadget bound to $UDC"
+}
+
+ifup() {
+	i=0
+	while [ $i -lt 5 ]; do
+		ifconfig "$IFACE" "$IPADDR" netmask 255.255.255.0 up 2>/dev/null && return 0
+		i=$((i+1)); sleep 1
+	done
+	log "WARN: $IFACE did not come up (WiFi remains the fallback dev path)"
+	return 1
+}
+
+storage_on() {
+	compose || return 1
+	[ "$(cat "$LUN" 2>/dev/null)" = "$SDDEV" ] && { log "already in storage mode"; return 0; }
+	# Fully stop the mpd DAEMON (not just playback) so no fd holds the SD; else
+	# exposing the block device to the host races the local mount -> corruption.
+	stop_mpd
+	sync
+	i=0
+	while grep -q " $SDMNT " /proc/mounts; do
+		umount "$SDMNT" 2>/dev/null && break
+		i=$((i+1))
+		if [ $i -ge 5 ]; then
+			log "ERR: $SDMNT busy (held by: $(fuser -m "$SDMNT" 2>/dev/null)); aborting"
+			/usr/sbin/sd-mount; /etc/init.d/S95mpd start >/dev/null 2>&1
+			return 1
+		fi
+		sleep 1
+	done
+	if ! echo "$SDDEV" > "$LUN" 2>/dev/null; then
+		log "ERR: could not set LUN; restoring"
+		/usr/sbin/sd-mount; /etc/init.d/S95mpd start >/dev/null 2>&1
+		return 1
+	fi
+	log "STORAGE mode: host now sees $SDDEV; usb0 still $IPADDR"
+}
+
+storage_off() {
+	compose || return 1
+	# Already in a healthy network state (LUN empty, SD mounted, mpd up)? Do nothing.
+	# The UI calls this both from Back AND from a belt-and-suspenders screen-delete cb,
+	# so skip the redundant sd-mount + mpd restart on the common already-network path.
+	if [ -z "$(cat "$LUN" 2>/dev/null)" ] && grep -q " $SDMNT " /proc/mounts && pidof mpd >/dev/null 2>&1; then
+		return 0
+	fi
+	# Eject the LUN so the host loses the drive. If the host STILL has it mounted
+	# the kernel returns EBUSY -- we must NOT force it (the host may hold unflushed
+	# data -> corruption) and must NOT locally remount (that would double-own the
+	# block device the host is still using). Report EBUSY as rc=2 so the UI can
+	# ask the user to eject on their computer first, and leave storage mode intact.
+	if [ -n "$(cat "$LUN" 2>/dev/null)" ]; then
+		if ! echo "" > "$LUN" 2>/dev/null; then
+			log "eject BUSY: host still has the drive mounted; staying in storage mode"
+			return 2
+		fi
+	fi
+	sync
+	/usr/sbin/sd-mount                      # remount /media/sd (idempotent)
+	/etc/init.d/S95mpd start >/dev/null 2>&1
+	( export MPD_HOST=/run/mpd.sock; mpc update >/dev/null 2>&1 ) || true
+	log "NETWORK mode: SD remounted, mpd back"
+}
+
+case "${1:-status}" in
+	net|network-init) compose && ifup ;;
+	storage|storage-on)   storage_on ;;
+	network|storage-off)  storage_off ;;
+	status)  [ -n "$(cat "$LUN" 2>/dev/null)" ] && echo storage || echo network ;;
+	*) echo "usage: $0 {net|storage|network|status}"; exit 1 ;;
+esac

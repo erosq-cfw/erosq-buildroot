@@ -1,0 +1,168 @@
+diff --git a/include/lvgl/drivers/display/lv_linux_drm.h b/include/lvgl/drivers/display/lv_linux_drm.h
+index a08c475..a939916 100644
+--- a/include/lvgl/drivers/display/lv_linux_drm.h
++++ b/include/lvgl/drivers/display/lv_linux_drm.h
+@@ -71,6 +71,16 @@ lv_display_t * lv_linux_drm_create(void);
+  */
+ lv_result_t lv_linux_drm_set_file(lv_display_t * disp, const char * file, int64_t connector_id);
+ 
++/* Return the open DRM fd backing this display (or -1). Lets the app hand off
++ * DRM master to a child process (drmDropMaster/drmSetMaster) without tearing
++ * down the display. EROS Q addition (not upstream lvgl). */
++int lv_linux_drm_get_fd(lv_display_t * disp);
++
++/* Force the next flush to issue a full modeset (CRTC ACTIVE + mode), not just a
++ * plane update. Needed after a child process (drmtest/emulator) took over the
++ * CRTC and left the pipe disabled, to re-run the driver's pipe .enable. */
++void lv_linux_drm_force_modeset(lv_display_t * disp);
++
+ /**
+  * @brief Automatically find a suitable DRM device path
+  *
+diff --git a/src/drivers/display/drm/lv_linux_drm.c b/src/drivers/display/drm/lv_linux_drm.c
+index 7da1217..520898d 100644
+--- a/src/drivers/display/drm/lv_linux_drm.c
++++ b/src/drivers/display/drm/lv_linux_drm.c
+@@ -21,6 +21,7 @@
+ #include <xf86drm.h>
+ #include <xf86drmMode.h>
+ #include <drm_fourcc.h>
++#include <drm_mode.h>
+ 
+ #if LV_USE_LINUX_DRM_GBM_BUFFERS
+     #include <gbm.h>
+@@ -55,6 +56,7 @@ typedef struct {
+ 
+ typedef struct {
+     int fd;
++    int modeset_pending;   /* next commit does a full modeset (ACTIVE+MODE) */
+     uint32_t conn_id, enc_id, crtc_id, plane_id, crtc_idx;
+     uint32_t width, height;
+     uint32_t mmWidth, mmHeight;
+@@ -74,6 +76,9 @@ typedef struct {
+     drmModePropertyPtr crtc_props[128];
+     drmModePropertyPtr conn_props[128];
+     drm_buffer_t drm_bufs[BUFFER_CNT];
++    /* Bounding box of areas flushed this refresh, sent as FB_DAMAGE_CLIPS. */
++    int dmg_x1, dmg_y1, dmg_x2, dmg_y2;   /* x1,y1 inclusive; x2,y2 exclusive; empty when x2==0 */
++    int dmg_valid;
+     drm_buffer_t * act_buf;
+ #if LV_USE_LINUX_DRM_GBM_BUFFERS
+     struct gbm_device * gbm_device;
+@@ -141,6 +146,7 @@ lv_display_t * lv_linux_drm_create(void)
+     if(drm_dev == NULL) return NULL;
+ 
+     drm_dev->fd = -1;
++    drm_dev->modeset_pending = 1;   /* first commit must modeset */
+ 
+     disp = lv_display_create(800, 480);
+     if(disp == NULL) {
+@@ -155,6 +161,18 @@ lv_display_t * lv_linux_drm_create(void)
+     return disp;
+ }
+ 
++int lv_linux_drm_get_fd(lv_display_t * disp)
++{
++    drm_dev_t * drm_dev = lv_display_get_driver_data(disp);
++    return drm_dev ? drm_dev->fd : -1;
++}
++
++void lv_linux_drm_force_modeset(lv_display_t * disp)
++{
++    drm_dev_t * drm_dev = lv_display_get_driver_data(disp);
++    if(drm_dev) drm_dev->modeset_pending = 1;
++}
++
+ /* Called by LVGL when there is something that needs redrawing
+  * it sets the active buffer. if GBM buffers are used, it issues a DMA_BUF_SYNC
+  * ioctl call to lock the buffer for CPU access, the buffer is unlocked just
+@@ -442,7 +460,6 @@ static int drm_add_conn_property(drm_dev_t * drm_dev, const char * name, uint64_
+ static int drm_dmabuf_set_plane(drm_dev_t * drm_dev, drm_buffer_t * buf)
+ {
+     int ret;
+-    static int first = 1;
+     uint32_t flags = DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_NONBLOCK;
+ 
+ #if LV_USE_LINUX_DRM_GBM_BUFFERS
+@@ -458,8 +475,8 @@ static int drm_dmabuf_set_plane(drm_dev_t * drm_dev, drm_buffer_t * buf)
+ 
+     drm_dev->req = drmModeAtomicAlloc();
+ 
+-    /* On first Atomic commit, do a modeset */
+-    if(first) {
++    /* On the first commit (or after lv_linux_drm_force_modeset), do a modeset */
++    if(drm_dev->modeset_pending) {
+         drm_add_conn_property(drm_dev, "CRTC_ID", drm_dev->crtc_id);
+ 
+         drm_add_crtc_property(drm_dev, "MODE_ID", drm_dev->blob_id);
+@@ -467,7 +484,7 @@ static int drm_dmabuf_set_plane(drm_dev_t * drm_dev, drm_buffer_t * buf)
+ 
+         flags |= DRM_MODE_ATOMIC_ALLOW_MODESET;
+ 
+-        first = 0;
++        drm_dev->modeset_pending = 0;
+     }
+ 
+     drm_add_plane_property(drm_dev, "FB_ID", buf->fb_handle);
+@@ -481,13 +498,32 @@ static int drm_dmabuf_set_plane(drm_dev_t * drm_dev, drm_buffer_t * buf)
+     drm_add_plane_property(drm_dev, "CRTC_W", drm_dev->width);
+     drm_add_plane_property(drm_dev, "CRTC_H", drm_dev->height);
+ 
++    uint32_t dmg_blob = 0;
++    if(drm_dev->dmg_valid) {
++        struct drm_mode_rect clip = {
++            .x1 = drm_dev->dmg_x1, .y1 = drm_dev->dmg_y1,
++            .x2 = drm_dev->dmg_x2, .y2 = drm_dev->dmg_y2,
++        };
++        uint32_t pid = get_plane_property_id(drm_dev, "FB_DAMAGE_CLIPS");
++        if(pid && drmModeCreatePropertyBlob(drm_dev->fd, &clip, sizeof(clip), &dmg_blob) == 0)
++            drmModeAtomicAddProperty(drm_dev->req, drm_dev->plane_id, pid, dmg_blob);
++    }
++
+     ret = drmModeAtomicCommit(drm_dev->fd, drm_dev->req, flags, drm_dev);
+     if(ret) {
+         LV_LOG_ERROR("drmModeAtomicCommit failed: %s (%d)", strerror(errno), errno);
++        if(dmg_blob) drmModeDestroyPropertyBlob(drm_dev->fd, dmg_blob);
++        /* Keep the damage accumulator: these areas were never presented, so
++         * they must ride along on the next successful commit or the panel
++         * GRAM is left permanently stale there. */
+         drmModeAtomicFree(drm_dev->req);
+         return ret;
+     }
+ 
++    if(dmg_blob) drmModeDestroyPropertyBlob(drm_dev->fd, dmg_blob);
++    drm_dev->dmg_valid = 0;
++    drm_dev->dmg_x2 = 0;
++
+     return 0;
+ }
+ 
+@@ -1065,11 +1101,26 @@ static void drm_flush_wait(lv_display_t * disp)
+ 
+ static void drm_flush(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map)
+ {
++    drm_dev_t * drm_dev = lv_display_get_driver_data(disp);
++
++    /* Union this area (inclusive) into the damage box (x2/y2 exclusive). */
++    if(area) {
++        int ax2 = area->x2 + 1, ay2 = area->y2 + 1;
++        if(!drm_dev->dmg_valid) {
++            drm_dev->dmg_x1 = area->x1; drm_dev->dmg_y1 = area->y1;
++            drm_dev->dmg_x2 = ax2;      drm_dev->dmg_y2 = ay2;
++            drm_dev->dmg_valid = 1;
++        } else {
++            if(area->x1 < drm_dev->dmg_x1) drm_dev->dmg_x1 = area->x1;
++            if(area->y1 < drm_dev->dmg_y1) drm_dev->dmg_y1 = area->y1;
++            if(ax2 > drm_dev->dmg_x2) drm_dev->dmg_x2 = ax2;
++            if(ay2 > drm_dev->dmg_y2) drm_dev->dmg_y2 = ay2;
++        }
++    }
++
+     if(!lv_display_flush_is_last(disp)) return;
+ 
+-    LV_UNUSED(area);
+     LV_UNUSED(px_map);
+-    drm_dev_t * drm_dev = lv_display_get_driver_data(disp);
+ 
+     LV_ASSERT(drm_dev->act_buf != NULL);
+ 

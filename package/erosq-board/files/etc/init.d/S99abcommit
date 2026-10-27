@@ -1,0 +1,26 @@
+#!/bin/sh
+# A/B commit-on-healthy-boot: if a try-boot (upgrade_available=1) reached the end
+# of init, promote the running slot to committed and stop the revert counter.
+# Mirrors erosq-ui/src/update_logic.h (ul_running_slot / ul_should_commit).
+# Reaching S99 == kernel+rootfs booted + init completed == healthy (spec §6.5).
+case "$1" in
+  start)
+    [ "$(fw_printenv -n upgrade_available 2>/dev/null)" = "1" ] || exit 0
+    # Test-boot hold: with U-Boot env ab_nocommit=1 a healthy try-boot is NOT
+    # committed, and upgrade_available/bootcount stay as U-Boot set them, so
+    # its bootlimit -> altbootcmd revert stays armed if the trial hangs.
+    # Unset (the default) = unchanged behaviour. Clear it after the trial.
+    if [ "$(fw_printenv -n ab_nocommit 2>/dev/null)" = "1" ]; then
+      echo "abcommit: commit held (ab_nocommit=1), try-boot stays revertible" > /dev/kmsg 2>/dev/null
+      logger -t abcommit "commit held (ab_nocommit=1)" 2>/dev/null
+      exit 0
+    fi
+    if grep -q "ubi.block=0,rootfs_b" /proc/cmdline; then run=b; else run=a; fi
+    fw_setenv boot_slot "$run"
+    fw_setenv boot_try
+    fw_setenv bootcount 0
+    fw_setenv upgrade_available 0
+    logger -t abcommit "committed slot $run"
+    ;;
+esac
+exit 0

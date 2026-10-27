@@ -1,0 +1,42 @@
+From: erosqcfw <erosqcfw@gmail.com>
+Subject: [PATCH] update: keep the entries a cancelled walk did not reach
+
+UpdateDirectory() unmarks every entry of a directory, walks it, then
+purges whatever is still unmarked.  When the walk is cancelled (MPD
+shutting down during an update), the loop stops early, so the purge
+deletes every entry it had not reached yet, in this directory and in
+every parent on the way back up.  UpdateService::Task() then sees
+"modified" and saves that cut-down database.
+
+On EROS Q every boot runs an update (S96sdscan), and mpd is stopped with
+SIGTERM on power-off (mpd-persist), on every Extras game launch and on
+entering USB file transfer mode.  Any of those during an update saved a
+db that was missing the rest of the card (10-23: 3538 of 4277 songs);
+the next boot then dropped the queue entries for the missing songs.
+
+Skip the purge once cancelled.  The saved db keeps what the walk added
+or updated plus everything it did not reach; the next complete update
+still purges deleted files.
+
+---
+diff --git a/src/db/update/Walk.cxx b/src/db/update/Walk.cxx
+index b322fbf..572df8d 100644
+--- a/src/db/update/Walk.cxx
++++ b/src/db/update/Walk.cxx
+@@ -375,6 +375,16 @@ UpdateWalk::UpdateDirectory(Directory &directory,
+ 		UpdateDirectoryChild(directory, child_exclude_list, name_utf8, info2);
+ 	}
+ 
++	if (cancel)
++		/* erosq: the loop stopped early, so every entry it did
++		   not reach is still unmarked; purging now would delete
++		   them from the database, and UpdateService saves the
++		   result.  A SIGTERM during an update (power-off, an
++		   Extras game, USB file transfer mode) used to cut the
++		   saved db down to the part already walked.  Keep the
++		   unvisited entries; the next update handles them. */
++		return true;
++
+ 	PurgeDeletedFromDirectory(directory);
+ 
+ 	directory.mtime = info.mtime;
