@@ -1,7 +1,7 @@
 #!/bin/sh
 # $1 = TARGET_DIR. Final rootfs fixups after all packages install.
 set -e
-TARGET="$1"
+TARGET="${1:?usage: post-build.sh TARGET_DIR}"  # empty would rm -rf host paths
 
 # ---------------------------------------------------------------------------
 # Read-only squashfs root + writable sysdata (/data) — persistent write paths.
@@ -41,7 +41,7 @@ mkdir -p "$TARGET/data" "$TARGET/media/sd"
 # Persistent write paths -> symlink into /data (target dirs made by S05mounts).
 # Remove whatever the packages installed (dir or pre-existing symlink) first.
 persist_symlink() {  # $1 = abs path under TARGET (no leading slash) ; $2 = /data target
-	rm -rf "$TARGET/$1"
+	rm -rf "${TARGET:?}/$1"
 	mkdir -p "$(dirname "$TARGET/$1")"
 	ln -sf "$2" "$TARGET/$1"
 }
@@ -136,15 +136,18 @@ done
 # hands it to `swupdate -R <firmware>` (--no-reinstalling) so an identical .swu is a
 # clean no-op while ANY different version (up or down) installs BOTH components,
 # keeping the inactive A/B slot coherent. The `kernel`/`rootfs` lines are
-# informational (About screen / debugging). mk-erosq-swu.sh MUST derive FWVER the
-# same way (RVER+KVER) from the SAME two sources. See spec §2.1.
+# informational (About screen / debugging). board/erosq/swu/mk-erosq-swu.sh reads
+# these lines back out of the squashfs, so the bundle always matches. See spec §2.1.
 KVER=$(cat "$BR2_EXTERNAL_EROSQ_PATH/../build-output/kernel.version" 2>/dev/null || echo "unknown")
 RVER=$(git -C "$BR2_EXTERNAL_EROSQ_PATH" describe --tags --always --dirty 2>/dev/null || echo "unknown")
 # erosq-ui is a SEPARATE repo whose binary lives in the rootfs, so a UI-only change
 # does NOT move RVER (erosq-br describe). Fold its version into the composite
 # firmware gate so such a change still bumps `firmware` and installs. (rootfs recipe
 # = RVER, UI = UIVER; both are informational, `firmware` is the single gate.)
-UIVER=$(git -C "$BR2_EXTERNAL_EROSQ_PATH/../erosq-ui" describe --tags --always --dirty 2>/dev/null || echo "unknown")
+# The erosq-ui package records the version it built (pins.mk, or git describe of
+# an OVERRIDE_SRCDIR checkout), so the binary and this line can't disagree.
+# ponytail: newest wins if the output dir holds both a pinned and an override build.
+UIVER=$(cat "$(ls -t "$BUILD_DIR"/erosq-ui-*/.erosq-ui-version 2>/dev/null | head -n1)" 2>/dev/null || echo "unknown")
 FWVER="${RVER}+${KVER}+ui${UIVER}"
 printf 'firmware %s\nkernel %s\nrootfs %s\nui %s\n' "$FWVER" "$KVER" "$RVER" "$UIVER" > "$TARGET/etc/sw-versions"
 echo "post-build: /etc/sw-versions -> firmware $FWVER (kernel $KVER / rootfs $RVER / ui $UIVER)"

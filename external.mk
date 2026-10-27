@@ -1,3 +1,5 @@
+# Pinned versions first: package .mk files expand them at $(eval) time.
+include $(BR2_EXTERNAL_EROSQ_PATH)/pins.mk
 include $(sort $(wildcard $(BR2_EXTERNAL_EROSQ_PATH)/package/*/*.mk))
 
 # MPD: compile out asserts (meson b_ndebug defaults false even for release

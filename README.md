@@ -31,19 +31,26 @@ and `ubi_reader` (`pip install ubi_reader`) for the stock-firmware step.
 ```sh
 mkdir erosq && cd erosq
 git clone https://github.com/erosq-cfw/erosq-buildroot
-git clone https://github.com/erosq-cfw/erosq-ui      # must sit next to erosq-buildroot
 wget https://buildroot.org/downloads/buildroot-2026.08.tar.gz
 tar xf buildroot-2026.08.tar.gz
 ./erosq-buildroot/apply-patches.sh buildroot-2026.08
+
+# the toolchain: download sdk-$(./erosq-buildroot/ci/sdk.sh id).tar.gz from the
+# release of that name, or build it (about 20 min on 24 cores):
+#   ./erosq-buildroot/ci/sdk.sh build sdk-build
+./erosq-buildroot/ci/sdk.sh install sdk-<id>.tar.gz
 
 make -C buildroot-2026.08 O=$PWD/output BR2_EXTERNAL=$PWD/erosq-buildroot erosq_defconfig
 make -C buildroot-2026.08 O=$PWD/output
 ```
 
-The root filesystem lands in `output/images/rootfs.squashfs`.
+The root filesystem lands in `output/images/rootfs.squashfs`. erosq-ui and
+LVGL are downloaded at the versions pinned in `pins.mk`. To build your own
+erosq-ui checkout instead, put
+`EROSQ_UI_OVERRIDE_SRCDIR = /path/to/erosq-ui` in `output/local.mk`.
 
-`post-build.sh` writes `/etc/sw-versions` from `git describe` of this tree
-and of `../erosq-ui`, plus the kernel version in
+`post-build.sh` writes `/etc/sw-versions` from `git describe` of this tree,
+the erosq-ui version that was built, and the kernel version in
 `../build-output/kernel.version` (written by the kernel build; `unknown` if
 absent).
 
@@ -89,7 +96,7 @@ openssl pkey -in swu-priv.pem -pubout -out swu-pub.pem
 2. Bundle and sign:
 
    ```sh
-   erosq-buildroot/docs/fw-update-artifacts/mk-erosq-swu.sh --key swu-priv.pem \
+   erosq-buildroot/board/erosq/swu/mk-erosq-swu.sh --key swu-priv.pem \
        erosq.itb output/images/rootfs.squashfs erosq.swu
    ```
 

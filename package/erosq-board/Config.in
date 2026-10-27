@@ -33,7 +33,7 @@ config BR2_PACKAGE_EROSQ_BOARD_SWU_PUBKEY
 	help
 	  PEM public key installed as /etc/swupdate/public.pem; the
 	  device only installs .swu bundles signed by the matching
-	  private key (see docs/fw-update-artifacts/mk-erosq-swu.sh
+	  private key (see board/erosq/swu/mk-erosq-swu.sh
 	  --key).
 
 	  Empty = the project's official release key, so the image

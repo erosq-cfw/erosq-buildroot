@@ -4,12 +4,14 @@
 #
 ################################################################################
 
-EROSQ_UI_VERSION = erosq-local
-# Build from <external>/../erosq-ui (a checkout of erosq-ui next to this tree),
-# the same tree post-build.sh reads the `ui` version from (git describe), so the
-# binary and /etc/sw-versions can't disagree.
-EROSQ_UI_SITE = $(BR2_EXTERNAL_EROSQ_PATH)/../erosq-ui
-EROSQ_UI_SITE_METHOD = local
+# Pinned in pins.mk. Developers build a local checkout instead with
+#   EROSQ_UI_OVERRIDE_SRCDIR = /path/to/erosq-ui
+# in the output directory's local.mk; LVGL then still comes from the pin below.
+EROSQ_UI_VERSION = $(EROSQ_UI_SHA)
+EROSQ_UI_SITE = https://github.com/erosq-cfw/erosq-ui.git
+EROSQ_UI_SITE_METHOD = git
+EROSQ_UI_LVGL_SOURCE = v$(LVGL_VERSION).tar.gz
+EROSQ_UI_EXTRA_DOWNLOADS = https://github.com/lvgl/lvgl/archive/refs/tags/$(EROSQ_UI_LVGL_SOURCE)
 EROSQ_UI_LICENSE = MIT
 EROSQ_UI_LICENSE_FILES = LICENSE
 # expat: podindex's XML parser. Already built as a dbus dependency, so this
@@ -33,19 +35,22 @@ EROSQ_UI_CONF_OPTS = \
 	-DLIBTINYALSA_INC=$(STAGING_DIR)/usr/include \
 	-DLIBTINYALSA_LIB=$(STAGING_DIR)/usr/lib/libtinyalsa.a
 
-# Apply the vendored-lvgl patches (build.sh does this via git-apply; replicate with patch -N
-# so it's idempotent whether or not the copied lvgl tree already carries them).
-# NB: this Buildroot's pkgdir strips the trailing slash (pkg-utils.mk patsubst),
-# so the "/" below is load-bearing — without it the glob was
-# ".../erosq-uilvgl-patches/*.patch" and the hook was a silent no-op.
-define EROSQ_UI_PATCH_LVGL
-	for p in $(EROSQ_UI_PKGDIR)/lvgl-patches/*.patch; do \
-		patch -d $(@D)/lvgl -p1 -N -r - <$$p || true; \
-	done
+# LVGL is not vendored in erosq-ui: unpack the pinned release into lvgl/ and
+# apply our patches (a patch that no longer applies fails the build). Runs after
+# the git extract and, for an OVERRIDE_SRCDIR build, after the rsync. Also record
+# the erosq-ui version for post-build.sh's /etc/sw-versions.
+define EROSQ_UI_ADD_LVGL
+	rm -rf $(@D)/lvgl
+	mkdir -p $(@D)/lvgl
+	$(call suitable-extractor,$(EROSQ_UI_LVGL_SOURCE)) $(EROSQ_UI_DL_DIR)/$(EROSQ_UI_LVGL_SOURCE) | \
+		$(TAR) --strip-components=1 -C $(@D)/lvgl $(TAR_OPTIONS) -
+	$(APPLY_PATCHES) $(@D)/lvgl $(EROSQ_UI_PKGDIR)/lvgl-patches \*.patch
+	$(if $(EROSQ_UI_OVERRIDE_SRCDIR),\
+		git -C $(EROSQ_UI_OVERRIDE_SRCDIR) describe --tags --always --dirty,\
+		echo $(EROSQ_UI_DESCRIBE)) > $(@D)/.erosq-ui-version
 endef
-# local-site packages have no extract step (they rsync -> .stamp_rsynced), so
-# only POST_RSYNC_HOOKS fire; POST_EXTRACT_HOOKS silently never ran.
-EROSQ_UI_POST_RSYNC_HOOKS += EROSQ_UI_PATCH_LVGL
+EROSQ_UI_POST_EXTRACT_HOOKS += EROSQ_UI_ADD_LVGL
+EROSQ_UI_POST_RSYNC_HOOKS += EROSQ_UI_ADD_LVGL
 
 # CMakeLists has no install() rule for the app: install explicitly.
 define EROSQ_UI_INSTALL_TARGET_CMDS
