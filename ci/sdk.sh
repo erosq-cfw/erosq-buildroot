@@ -4,6 +4,8 @@
 #   ci/sdk.sh id            print SDK_ID (changes when any toolchain input does)
 #   ci/sdk.sh build <dir>   fetch+verify Buildroot, patch, build; leaves
 #                           <dir>/sdk-<SDK_ID>.tar.gz
+#   ci/sdk.sh install <tgz> unpack + relocate an SDK tarball to sdk/, where
+#                           erosq_defconfig expects it
 # Env: BR2_DL_DIR (download cache, optional). Parallelism is BR2_JLEVEL (0 = nproc).
 set -euo pipefail
 EXT=$(cd "$(dirname "$0")/.." && pwd)
@@ -34,5 +36,10 @@ build)
 	mv "$W"/out/images/*_sdk-buildroot.tar.gz "$W/sdk-$(sdk_id).tar.gz"
 	ls -l "$W/sdk-$(sdk_id).tar.gz"
 	;;
-*) sed -n '2,8p' "$0"; exit 2 ;;
+install)
+	rm -rf "$EXT/sdk" && mkdir "$EXT/sdk"
+	tar -xzf "${2:?usage: $0 install <sdk tarball>}" -C "$EXT/sdk" --strip-components=1
+	"$EXT/sdk/relocate-sdk.sh"
+	;;
+*) sed -n '2,10p' "$0"; exit 2 ;;
 esac

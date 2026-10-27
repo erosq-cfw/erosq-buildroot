@@ -3,3 +3,5 @@
 /stock/
 # private SSH seed keys etc. for private builds (never commit)
 /private/
+# toolchain SDK unpacked by ci/sdk.sh install
+/sdk/

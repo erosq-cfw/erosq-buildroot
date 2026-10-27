@@ -6,17 +6,27 @@ BR2_mipsel=y
 BR2_mips_32r2=y
 # BR2_MIPS_SOFT_FLOAT is not set
 
-# Toolchain — already built in output/host (musl, gcc 14, C++, size-optimized)
-BR2_TOOLCHAIN_BUILDROOT_MUSL=y
-# gcc 15 (BR 2026.08 default). Note .gcda profiles are stamped with
-# major+minor (B43* = 14.3), so ANY gcc change -- 14.3->14.4 included --
-# drops pcsx PGO until re-profiled on device.
-BR2_GCC_VERSION_15_X=y
-# Headers must be <= the running kernel (6.12.93): userspace built against
-# newer headers can hit ENOSYS on syscalls/ioctls 6.12 lacks. NOTE: changing
-# this from 6.18 forces a full toolchain (and world) rebuild.
-BR2_KERNEL_HEADERS_6_12=y
-BR2_TOOLCHAIN_BUILDROOT_CXX=y
+# Toolchain: the prebuilt SDK from configs/erosq_sdk_defconfig, unpacked to
+# sdk/ by `ci/sdk.sh install`. The lines below must describe that SDK (and
+# keep BR2_MIPS_SOFT_FLOAT unset above, or packages build soft-float).
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM=y
+BR2_TOOLCHAIN_EXTERNAL_PREINSTALLED=y
+BR2_TOOLCHAIN_EXTERNAL_PATH="$(BR2_EXTERNAL_EROSQ_PATH)/sdk"
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX="mipsel-buildroot-linux-musl"
+# gcc 15. Note .gcda profiles are stamped with major+minor, so ANY gcc
+# change -- 15.3->15.4 included -- drops pcsx PGO until re-profiled on device.
+BR2_TOOLCHAIN_EXTERNAL_GCC_15=y
+# Headers must be <= the running kernel: userspace built against newer
+# headers can hit ENOSYS on syscalls/ioctls the kernel lacks.
+BR2_TOOLCHAIN_EXTERNAL_HEADERS_6_12=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_MUSL=y
+BR2_TOOLCHAIN_EXTERNAL_HAS_SSP=y
+BR2_TOOLCHAIN_EXTERNAL_HAS_SSP_STRONG=y
+BR2_TOOLCHAIN_EXTERNAL_CXX=y
+BR2_SSP_STRONG=y
+BR2_RELRO_FULL=y
+BR2_PIC_PIE=y
 BR2_OPTIMIZE_S=y
 BR2_DOWNLOAD_FORCE_CHECK_HASHES=y
 # Extra per-package patches from the external tree; carries the bluez5_utils
