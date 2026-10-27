@@ -25,10 +25,7 @@ git -C "$K" reset -q --hard
 KBUILD_BUILD_TIMESTAMP=$(git -C "$K" log -1 --format=%cd --date=rfc2822)
 export ARCH=mips CROSS_COMPILE=$CROSS LOCALVERSION='' KBUILD_BUILD_USER=erosqcfw \
 	KBUILD_BUILD_HOST=erosq-cfw KBUILD_BUILD_VERSION=1 KBUILD_BUILD_TIMESTAMP
-# ponytail: the MIPS vDSO builds with -g and its own flag list (drops the kernel's
-# prefix maps), so the build dir leaks into its build-id. Mapping it in CC reaches
-# every compile; drop this once the kernel's vdso Makefile passes the prefix map.
-CC="${CROSS}gcc -ffile-prefix-map=$K=."
+CC="${CROSS}gcc"
 command -v ccache >/dev/null && CC="ccache $CC"
 mkdir -p "$O" && rm -f "$O"/*
 # separate calls: one make with both targets builds the dtb twice in parallel (race)

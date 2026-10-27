@@ -9,5 +9,5 @@ LVGL_VERSION=9.6.0
 # erosq-firmware: stock Wi-Fi/BT chip firmware (package/erosq-firmware)
 FIRMWARE_SHA=650011c4508b869699bc9afd57c248cdd5a7661e
 # kernel and U-Boot sources (ci/kernel.sh, ci/uboot.sh)
-LINUX_SHA=0ad565a3fba4919690ad0dc1eb26a9ab3c7f5535
+LINUX_SHA=5ce79c8444d604e4a48b90b56b683b60a25336d0
 UBOOT_SHA=76df256d20ba9641ba6a154cdbe11a448b97bbeb
