@@ -1,0 +1,61 @@
+# Builds the kernel FIT image and U-Boot from LINUX_SHA / UBOOT_SHA in pins.mk
+# with the toolchain SDK (prerelease sdk-<SDK_ID>, made by sdk.yml).
+name: boot
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - pins.mk
+      - ci/kernel.sh
+      - ci/uboot.sh
+      - board/erosq/kernel/**
+      - .github/workflows/boot.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [kernel, uboot]
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 250M
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Host packages
+        run: sudo apt-get update -q && sudo apt-get install -qy --no-install-recommends bc bison flex libssl-dev libgnutls28-dev u-boot-tools device-tree-compiler ccache
+
+      - name: SDK
+        run: |
+          id=$(ci/sdk.sh id)
+          gh release download "sdk-$id" -p "sdk-$id.tar.gz*" -D "$RUNNER_TEMP"
+          (cd "$RUNNER_TEMP" && sha256sum -c "sdk-$id.tar.gz.sha256")
+          ci/sdk.sh install "$RUNNER_TEMP/sdk-$id.tar.gz"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-${{ matrix.target }}-${{ hashFiles('pins.mk') }}
+          restore-keys: ccache-${{ matrix.target }}-
+
+      - name: Build
+        run: ci/${{ matrix.target }}.sh "$RUNNER_TEMP/w"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ runner.temp }}/w/out/
+          retention-days: 14

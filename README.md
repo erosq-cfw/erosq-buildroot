@@ -6,9 +6,9 @@ filesystem: musl userspace, MPD with ALSA output, BlueZ + BlueALSA for
 Bluetooth audio, wpa_supplicant, swupdate for A/B updates, and the
 [erosq-ui](https://github.com/erosq-cfw/erosq-ui) LVGL front end.
 
-The kernel and U-Boot are built separately; together they produce the FIT
-image (`erosq.itb`) that goes into a `.swu` update bundle with the root
-filesystem built here.
+The kernel and U-Boot are built separately (`ci/kernel.sh`, `ci/uboot.sh`).
+The kernel build produces the FIT image (`erosq.itb`, kernel + DTB) that goes
+into a `.swu` update bundle with the root filesystem built here.
 
 ## Layout
 
@@ -53,6 +53,22 @@ erosq-ui checkout instead, put
 the erosq-ui version that was built, and the kernel version in
 `../build-output/kernel.version` (written by the kernel build; `unknown` if
 absent).
+
+## Kernel and U-Boot
+
+Both build from the commits pinned in `pins.mk` (`LINUX_SHA`, `UBOOT_SHA`)
+with the SDK installed above; the host needs `mkimage` and `dtc`
+(Debian/Ubuntu: `u-boot-tools device-tree-compiler`).
+
+```sh
+./erosq-buildroot/ci/kernel.sh kbuild   # kbuild/out/erosq-<version>.itb, kernel.version
+./erosq-buildroot/ci/uboot.sh ubuild    # ubuild/out/u-boot.bin, u-boot-flash.bin, u-boot-spl.bin
+```
+
+Copy `kbuild/out/kernel.version` to `build-output/kernel.version` before the
+root filesystem build so `/etc/sw-versions` names the kernel. A `.swu` update
+never touches U-Boot; `u-boot-flash.bin` (padded to the 1 MiB the SPL loads)
+is for recovery installs.
 
 ## Wi-Fi and Bluetooth chip firmware
 

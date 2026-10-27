@@ -1,0 +1,34 @@
+/dts-v1/;
+/ {
+    description = "EROS Q @VER@ (kernel + DTB)";
+    #address-cells = <1>;
+    images {
+        kernel {
+            description = "Linux @VER@";
+            data = /incbin/("vmlinux.bin.gz");
+            type = "kernel";
+            arch = "mips";
+            os = "linux";
+            compression = "gzip";
+            load = <0x80100000>;
+            entry = <@ENTRY@>;
+            hash-1 { algo = "crc32"; };
+        };
+        fdt-1 {
+            description = "x1000-erosq";
+            data = /incbin/("erosq.dtb");
+            type = "flat_dt";
+            arch = "mips";
+            compression = "none";
+            hash-1 { algo = "crc32"; };
+        };
+    };
+    configurations {
+        default = "conf-1";
+        conf-1 {
+            description = "EROS Q";
+            kernel = "kernel";
+            fdt = "fdt-1";
+        };
+    };
+};
