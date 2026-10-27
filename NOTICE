@@ -26,10 +26,10 @@ Downloaded at build time (not in this repository)
 
 Wi-Fi and Bluetooth chip firmware
     The CYW43438 Wi-Fi firmware, its NVRAM file and the Bluetooth patchram are
-    proprietary and are NOT in this repository. The build extracts them from
-    the stock EROS Q firmware that you supply (see README.md). An image built
-    that way contains those proprietary files; check their terms before you
-    redistribute it.
+    proprietary and are NOT in this repository. The build takes them, unmodified,
+    from the separate erosq-firmware repository or from stock EROS Q firmware
+    that you supply (see README.md). Images built this way contain those
+    proprietary files.
 
 Trademarks
     EROS Q is a product name of its respective owner. This project is not

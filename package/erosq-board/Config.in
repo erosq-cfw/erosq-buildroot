@@ -7,8 +7,8 @@ config BR2_PACKAGE_EROSQ_BOARD
 	# /lib/firmware/regulatory.db{,.p7s} for cfg80211
 	select BR2_PACKAGE_WIRELESS_REGDB
 	help
-	  EROS Q board support: the WiFi/BT chip firmware (extracted
-	  from the stock firmware at build time), the device bring-up
+	  EROS Q board support: the WiFi/BT chip firmware (checked and
+	  installed at build time, see erosq-firmware), the device bring-up
 	  scripts (bt_*, wifi_*), and the boot splash image (the
 	  erosq-splash binary comes from package/erosq-splash).
 
@@ -17,16 +17,16 @@ if BR2_PACKAGE_EROSQ_BOARD
 config BR2_PACKAGE_EROSQ_BOARD_STOCK_FW
 	string "stock firmware for the WiFi/BT chip blobs"
 	help
-	  The CYW43438 WiFi firmware, its NVRAM and the BT patchram are
-	  not redistributable, so they are taken from the stock EROS Q
-	  firmware at build time: the stock update file
+	  Optional: take the CYW43438 WiFi firmware, its NVRAM and the
+	  BT patchram from your own copy of the stock EROS Q firmware
+	  instead of the erosq-firmware package: the stock update file
 	  update_erosQ_v2.2-rbuninstall.upt, its SYSTEM.UBI, or an
 	  extracted stock rootfs directory. A .upt or SYSTEM.UBI needs
 	  ubi_reader on the host (pip install ubi_reader).
 
 	  Empty = the first *.upt in $(BR2_EXTERNAL_EROSQ_PATH)/stock/
-	  (gitignored). The build stops if none is found or the files
-	  don't match the pinned sha256 sums.
+	  (gitignored), else the erosq-firmware package. The build stops
+	  if the files don't match the pinned sha256 sums.
 
 config BR2_PACKAGE_EROSQ_BOARD_SWU_PUBKEY
 	string "swupdate public key (self-signed builds)"

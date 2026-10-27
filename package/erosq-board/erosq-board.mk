@@ -7,7 +7,7 @@
 EROSQ_BOARD_VERSION = erosq-local
 EROSQ_BOARD_SITE = $(BR2_EXTERNAL_EROSQ_PATH)/package/erosq-board/files
 EROSQ_BOARD_SITE_METHOD = local
-EROSQ_BOARD_LICENSE = MIT (scripts), PROPRIETARY (WiFi/BT firmware, extracted from the stock image)
+EROSQ_BOARD_LICENSE = MIT (scripts), PROPRIETARY (WiFi/BT firmware from the stock image)
 
 # Install AFTER these so the EROS /etc/mpd.conf and /etc/bluetooth/main.conf
 # overrides win over the packages' generic defaults. busybox is here because
@@ -44,16 +44,24 @@ endef
 EROSQ_BOARD_SWU_PUBKEY = $(call qstrip,$(BR2_PACKAGE_EROSQ_BOARD_SWU_PUBKEY))
 EROSQ_BOARD_SEED_AUTHORIZED_KEYS = $(call qstrip,$(BR2_PACKAGE_EROSQ_BOARD_SEED_AUTHORIZED_KEYS))
 
-# Stock image the chip firmware comes from (see Config.in); the script checks
-# every file against pinned sha256 sums and fails the build with a clear message.
-EROSQ_BOARD_STOCK_FW = $(or $(call qstrip,$(BR2_PACKAGE_EROSQ_BOARD_STOCK_FW)),\
+# Where the chip firmware comes from, first match wins: a stock image set in
+# Config.in or dropped in stock/ (private builds), else the pinned erosq-firmware
+# package, else nothing (warning; Wi-Fi/BT won't work). Either source goes through
+# extract-stock-firmware.py, which checks every file against pinned sha256 sums.
+EROSQ_BOARD_STOCK_FW_LOCAL = $(or $(call qstrip,$(BR2_PACKAGE_EROSQ_BOARD_STOCK_FW)),\
 	$(firstword $(wildcard $(BR2_EXTERNAL_EROSQ_PATH)/stock/*.upt)))
+EROSQ_BOARD_STOCK_FW = $(or $(EROSQ_BOARD_STOCK_FW_LOCAL),\
+	$(if $(BR2_PACKAGE_EROSQ_FIRMWARE),$(EROSQ_FIRMWARE_DIR)))
+EROSQ_BOARD_DEPENDENCIES += $(if $(BR2_PACKAGE_EROSQ_FIRMWARE),erosq-firmware)
 
 # UI launcher (S90erosq-ui): static, no stdio/malloc, so its resident cost is a few pages.
 define EROSQ_BOARD_BUILD_CMDS
 	rm -rf $(@D)/stock-fw
-	python3 -I $(EROSQ_BOARD_PKGDIR)/extract-stock-firmware.py \
-		"$(EROSQ_BOARD_STOCK_FW)" $(@D)/stock-fw
+	$(if $(EROSQ_BOARD_STOCK_FW),\
+		python3 -I $(EROSQ_BOARD_PKGDIR)/extract-stock-firmware.py \
+			"$(EROSQ_BOARD_STOCK_FW)" $(@D)/stock-fw,\
+		@echo "WARNING: erosq-board: no stock firmware and erosq-firmware disabled:" \
+			"the image ships NO Wi-Fi/BT chip firmware"; mkdir -p $(@D)/stock-fw)
 	$(TARGET_CC) $(TARGET_CFLAGS) -Os -static -Wall -Wextra \
 		-Wl,-z,max-page-size=4096 -o $(@D)/erosq-uilaunch $(@D)/src/erosq-uilaunch.c
 endef

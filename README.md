@@ -26,7 +26,7 @@ filesystem built here.
 ## Building
 
 Requirements: a Linux host with the usual Buildroot dependencies, Python 3,
-and `ubi_reader` (`pip install ubi_reader`) for the stock-firmware step.
+and `ubi_reader` (`pip install ubi_reader`) only if you build from a stock `.upt`.
 
 ```sh
 mkdir erosq && cd erosq
@@ -54,11 +54,12 @@ the erosq-ui version that was built, and the kernel version in
 `../build-output/kernel.version` (written by the kernel build; `unknown` if
 absent).
 
-## Wi-Fi and Bluetooth chip firmware (stock-firmware extract)
+## Wi-Fi and Bluetooth chip firmware
 
-The CYW43438 Wi-Fi firmware, its NVRAM and the Bluetooth patchram are not
-redistributable, so this repository does not contain them. The build takes
-them from the stock EROS Q firmware that you supply:
+The CYW43438 Wi-Fi firmware, its NVRAM and the Bluetooth patchram are the
+stock EROS Q files, unmodified. By default the build downloads them from
+[erosq-firmware](https://github.com/erosq-cfw/erosq-firmware) at
+`FIRMWARE_SHA` (`pins.mk`). To take them from your own stock firmware instead:
 
 1. Get the stock update file for your device (for example
    `update_erosQ_v2.2-rbuninstall.upt`).
@@ -67,16 +68,20 @@ them from the stock EROS Q firmware that you supply:
    the `.upt`, its `SYSTEM.UBI`, or an already extracted stock rootfs
    directory.
 
-`package/erosq-board/extract-stock-firmware.py` checks every file against
-pinned sha256 sums and stops the build with a clear message when the source is
-missing or does not match. You can also run it by hand:
+A local stock file wins over the download. With neither (stock file absent and
+`BR2_PACKAGE_EROSQ_FIRMWARE` off) the build warns and the image has no chip
+firmware, so Wi-Fi and Bluetooth don't work.
+
+Either way, `package/erosq-board/extract-stock-firmware.py` checks every file
+against pinned sha256 sums and stops the build when they don't match. You can
+also run it by hand:
 
 ```sh
 python3 erosq-buildroot/package/erosq-board/extract-stock-firmware.py SOURCE OUTDIR
 ```
 
-An image built this way contains the proprietary firmware files. Don't
-redistribute it unless their terms allow it.
+The firmware files are proprietary and carry no licence; see the
+erosq-firmware README for how they are redistributed.
 
 ## Signing updates (self-signed builds)
 

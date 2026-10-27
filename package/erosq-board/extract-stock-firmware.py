@@ -3,9 +3,9 @@
 # Copyright (c) 2026 erosqcfw
 """Extract the EROS Q Wi-Fi/BT chip firmware from the stock HiBy firmware.
 
-The CYW43438 (AzureWave AW-NM372SM) blobs are not redistributable, so the
-repo does not carry them: every build takes them from a stock image the
-builder supplies.
+The CYW43438 (AzureWave AW-NM372SM) blobs are the stock files, unmodified.
+They come from a stock image the builder supplies or, by default, from the
+erosq-firmware package (a copy of the same files in the stock layout).
 
 usage: extract-stock-firmware.py SOURCE OUTDIR
 
@@ -14,8 +14,9 @@ SOURCE is one of
     image holding SYSTEM.UBI; the hw4 / v2.2 file that the Rockbox
     uninstaller page distributes for the EROS Q),
   - that SYSTEM.UBI on its own,
-  - a directory with the stock rootfs already extracted (it must contain
-    firmware/ and lib/firmware/ as in the stock image).
+  - a directory with the stock rootfs already extracted, or the
+    erosq-firmware checkout (it must contain firmware/ and lib/firmware/ as
+    in the stock image).
 A .upt or SYSTEM.UBI needs ubi_reader on the host (pip install ubi_reader,
 GPL-3.0) for ubireader_extract_files.
 
@@ -49,7 +50,7 @@ STOCK = {  # path in the stock rootfs -> sha256
 }
 NVRAM_OUT = "63280e581240fcba0626850e1cd561543d6d9cd80d5854423e1602d7c28f5a81"
 
-HELP = ("Supply the stock EROS Q firmware: set BR2_PACKAGE_EROSQ_BOARD_STOCK_FW "
+HELP = ("Enable BR2_PACKAGE_EROSQ_FIRMWARE, or supply the stock EROS Q firmware: set BR2_PACKAGE_EROSQ_BOARD_STOCK_FW "
         "to the stock update_erosQ_v2.2-rbuninstall.upt (or its SYSTEM.UBI, or "
         "an extracted stock rootfs directory), or put the .upt in "
         "$BR2_EXTERNAL_EROSQ_PATH/stock/. See package/erosq-board/"

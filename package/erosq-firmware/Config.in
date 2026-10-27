@@ -1,0 +1,12 @@
+config BR2_PACKAGE_EROSQ_FIRMWARE
+	bool "erosq-firmware (stock Wi-Fi/BT chip firmware)"
+	default y
+	help
+	  The EROS Q stock v2.2 CYW43438 Wi-Fi firmware, its NVRAM and
+	  the BT patchram, unmodified, from the erosq-cfw/erosq-firmware
+	  repository at FIRMWARE_SHA (pins.mk). erosq-board installs
+	  them after checking every file against its pinned sha256.
+
+	  A stock image set in BR2_PACKAGE_EROSQ_BOARD_STOCK_FW (or in
+	  stock/) takes precedence. With neither, the image ships no
+	  chip firmware: Wi-Fi and Bluetooth do not work.
