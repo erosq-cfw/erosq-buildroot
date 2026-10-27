@@ -1,0 +1,89 @@
+# Builds the toolchain SDK once per toolchain change and publishes it as the
+# prerelease `sdk-<SDK_ID>`, which the rootfs/kernel jobs download.
+name: sdk
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - pins.mk
+      - configs/erosq_sdk_defconfig
+      - patches/buildroot/**
+      - ci/sdk.sh
+      - .github/workflows/sdk.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk
+  cancel-in-progress: false
+
+jobs:
+  sdk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: write   # create the sdk-<SDK_ID> prerelease
+      id-token: write   # build provenance attestation
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: SDK_ID
+        id: id
+        run: echo "sdk_id=$(ci/sdk.sh id)" >> "$GITHUB_OUTPUT"
+
+      - name: Already published?
+        id: have
+        run: |
+          if gh release view "sdk-${{ steps.id.outputs.sdk_id }}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "sdk-${{ steps.id.outputs.sdk_id }} exists; nothing to do"
+          fi
+
+      - name: Free disk
+        if: steps.have.outputs.skip != 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          free=$(df --output=avail -BG "$GITHUB_WORKSPACE" | tail -1 | tr -dc 0-9)
+          echo "free: ${free} GB"
+          [ "$free" -ge 10 ] || { echo "::error::under 10 GB free"; exit 1; }
+
+      - name: Host packages
+        if: steps.have.outputs.skip != 'true'
+        run: sudo apt-get update -q && sudo apt-get install -qy --no-install-recommends build-essential bc cpio file rsync unzip wget
+
+      - name: Build SDK
+        if: steps.have.outputs.skip != 'true'
+        run: ci/sdk.sh build "$RUNNER_TEMP/sdk"
+
+      - name: Attest
+        if: steps.have.outputs.skip != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/sdk/sdk-${{ steps.id.outputs.sdk_id }}.tar.gz
+
+      - name: Publish prerelease
+        if: steps.have.outputs.skip != 'true' && github.ref == 'refs/heads/main'
+        run: |
+          id=${{ steps.id.outputs.sdk_id }}
+          f=$RUNNER_TEMP/sdk/sdk-$id.tar.gz
+          (cd "$(dirname "$f")" && sha256sum "sdk-$id.tar.gz" > "sdk-$id.tar.gz.sha256")
+          gh release create "sdk-$id" "$f" "$f.sha256" --prerelease --target "$GITHUB_SHA" \
+            --title "Toolchain SDK $id" \
+            --notes "Buildroot SDK from configs/erosq_sdk_defconfig at $GITHUB_SHA. Used by the release builds as BR2_TOOLCHAIN_EXTERNAL_CUSTOM."
+
+      - name: Upload artifact (dispatch on a branch)
+        if: steps.have.outputs.skip != 'true' && github.ref != 'refs/heads/main'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sdk-${{ steps.id.outputs.sdk_id }}
+          path: ${{ runner.temp }}/sdk/sdk-${{ steps.id.outputs.sdk_id }}.tar.gz
+          retention-days: 14

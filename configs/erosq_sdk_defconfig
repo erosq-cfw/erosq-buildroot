@@ -1,0 +1,19 @@
+# Toolchain-only config: `make sdk` turns it into the prebuilt SDK that
+# erosq_defconfig consumes as an external toolchain (CI and local builds).
+# Every line must match erosq_defconfig's toolchain/target settings, because
+# the SDK's musl and libstdc++ are what ship in the rootfs.
+
+# Architecture / ABI: o32 mips32r2 hard-float FPXX LE
+BR2_mipsel=y
+BR2_mips_32r2=y
+# BR2_MIPS_SOFT_FLOAT is not set
+
+BR2_TOOLCHAIN_BUILDROOT_MUSL=y
+# A gcc change drops pcsx PGO profiles until re-profiled (see erosq_defconfig)
+BR2_GCC_VERSION_15_X=y
+# Headers must be <= the running kernel
+BR2_KERNEL_HEADERS_6_12=y
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+BR2_OPTIMIZE_S=y
+BR2_DOWNLOAD_FORCE_CHECK_HASHES=y
+BR2_REPRODUCIBLE=y
