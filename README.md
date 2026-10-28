@@ -10,6 +10,23 @@ The kernel and U-Boot are built separately (`ci/kernel.sh`, `ci/uboot.sh`).
 The kernel build produces the FIT image (`erosq.itb`, kernel + DTB) that goes
 into a `.swu` update bundle with the root filesystem built here.
 
+## Supported devices
+
+The firmware targets the Rockbox "hw4" EROS Q hardware class.
+
+| Device | Hardware versions | Status |
+|---|---|---|
+| Aigo EROS Q | V2.2 – V2.3 | Tested (on an EROS Q, hw4) |
+| Hifiwalker H2 | V1.9 – V2.3 | Expected to work (hw4), untested |
+| Surfans F20 | V3.4 – V3.5 | Expected to work (hw4), untested |
+
+Hardware classes as listed by the Rockbox project.
+
+> **Warning:** other hardware versions (hw1–hw3, and anything not listed
+> above) are **not supported**. Check your device's hardware version before
+> installing, and keep the stock firmware `.upt` for your device so you can
+> restore it.
+
 ## Layout
 
 | path | contents |
