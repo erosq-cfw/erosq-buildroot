@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: read   # ci/sdk-fetch.sh waits for an sdk run
 
 jobs:
   anon:
@@ -65,7 +66,7 @@ jobs:
 
   tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 150   # may wait for a new SDK (ci/sdk-fetch.sh)
     env:
       GH_TOKEN: ${{ github.token }}
       BR2_DL_DIR: ${{ github.workspace }}/../dl
@@ -83,11 +84,7 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: SDK
-        run: |
-          id=$(ci/sdk.sh id)
-          gh release download "sdk-$id" -p "sdk-$id.tar.gz*" -D "$RUNNER_TEMP"
-          (cd "$RUNNER_TEMP" && sha256sum -c "sdk-$id.tar.gz.sha256")
-          ci/sdk.sh install "$RUNNER_TEMP/sdk-$id.tar.gz"
+        run: ci/sdk-fetch.sh "$RUNNER_TEMP"
 
       # read-only: firmware.yml's rootfs job owns this cache
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
