@@ -118,6 +118,7 @@ rm -f "$TARGET"/usr/bin/flac "$TARGET"/usr/bin/metaflac "$TARGET"/usr/bin/faad \
 	"$TARGET"/usr/bin/mpg123 "$TARGET"/usr/bin/mpg123-id3dump \
 	"$TARGET"/usr/bin/mpg123-strip "$TARGET"/usr/bin/out123
 rm -rf "$TARGET"/usr/lib/mpg123        # out123/mpg123 CLI output plugins
+rm -rf "$TARGET"/usr/libexec/lzo      # lzo installs its examples unconditionally (lzotest etc.)
 for lib in libmad libFLAC++ libfaad_drm libvorbisfile libvorbisenc; do
 	if find "$TARGET" -type f \( -perm -u+x -o -name '*.so*' \) \
 			-exec readelf -d {} \; 2>/dev/null | grep -q "NEEDED.*$lib\.so"; then
