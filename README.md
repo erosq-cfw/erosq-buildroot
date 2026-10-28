@@ -51,8 +51,8 @@ erosq-ui checkout instead, put
 
 `post-build.sh` writes `/etc/sw-versions` from `git describe` of this tree,
 the erosq-ui version that was built, and the kernel version in
-`../build-output/kernel.version` (written by the kernel build; `unknown` if
-absent).
+`$EROSQ_KERNEL_VERSION` or, failing that, `../build-output/kernel.version`
+(written by the kernel build; `unknown` if neither is set).
 
 ## Kernel and U-Boot
 
@@ -69,6 +69,21 @@ Copy `kbuild/out/kernel.version` to `build-output/kernel.version` before the
 root filesystem build so `/etc/sw-versions` names the kernel. A `.swu` update
 never touches U-Boot; `u-boot-flash.bin` (padded to the 1 MiB the SPL loads)
 is for recovery installs.
+
+## Release builds (what CI runs)
+
+```sh
+./erosq-buildroot/ci/rootfs.sh rbuild kbuild/out/kernel.version
+./erosq-buildroot/board/erosq/swu/mk-erosq-swu.sh --unsigned \
+    kbuild/out/erosq-*.itb rbuild/out/rootfs.squashfs erosq-unsigned.swu
+```
+
+`ci/rootfs.sh` does a clean build in its own Buildroot tree, then checks the
+image: no SSH keys, no build paths, a clean `/etc/sw-versions`, and chip
+firmware (when present) identical to the pinned stock files. It also writes
+`legal-info.tar.gz`, `sources.tar` and a CycloneDX `sbom.cdx.json`. The
+`firmware` workflow runs the kernel, U-Boot, rootfs and `.swu` steps and
+attests every output; the `.swu` it makes is unsigned.
 
 ## Wi-Fi and Bluetooth chip firmware
 

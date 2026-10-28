@@ -127,6 +127,9 @@ for lib in libmad libFLAC++ libfaad_drm libvorbisfile libvorbisenc; do
 	fi
 done
 
+# gdb pretty-printer loader: no gdb on target, and it embeds the build path
+rm -f "$TARGET"/usr/lib/libstdc++.so.*-gdb.py
+
 # /etc/sw-versions: the update system's version source. REAL content-tied versions
 # (not an arbitrary stamp): kernel = release + source commit captured by
 # build-kernel.sh (build-output/kernel.version); rootfs = erosq-br git describe.
@@ -138,7 +141,8 @@ done
 # keeping the inactive A/B slot coherent. The `kernel`/`rootfs` lines are
 # informational (About screen / debugging). board/erosq/swu/mk-erosq-swu.sh reads
 # these lines back out of the squashfs, so the bundle always matches. See spec §2.1.
-KVER=$(cat "$BR2_EXTERNAL_EROSQ_PATH/../build-output/kernel.version" 2>/dev/null || echo "unknown")
+# $EROSQ_KERNEL_VERSION (ci/rootfs.sh) wins over the file.
+KVER=${EROSQ_KERNEL_VERSION:-$(cat "$BR2_EXTERNAL_EROSQ_PATH/../build-output/kernel.version" 2>/dev/null || echo "unknown")}
 RVER=$(git -C "$BR2_EXTERNAL_EROSQ_PATH" describe --tags --always --dirty 2>/dev/null || echo "unknown")
 # erosq-ui is a SEPARATE repo whose binary lives in the rootfs, so a UI-only change
 # does NOT move RVER (erosq-br describe). Fold its version into the composite

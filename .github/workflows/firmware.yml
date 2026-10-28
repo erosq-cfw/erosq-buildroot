@@ -1,0 +1,106 @@
+# Full firmware build: kernel + U-Boot (boot.yml), the rootfs with its
+# legal-info and SBOM (ci/rootfs.sh), and the UNSIGNED .swu with a build
+# provenance attestation. Signing happens on the maintainer's machine.
+name: firmware
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  boot:
+    uses: ./.github/workflows/boot.yml
+
+  rootfs:
+    needs: boot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BR2_DL_DIR: ${{ github.workspace }}/../dl
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          free=$(df --output=avail -BG "$GITHUB_WORKSPACE" | tail -1 | tr -dc 0-9)
+          echo "free: ${free} GB"
+          [ "$free" -ge 10 ] || { echo "::error::under 10 GB free"; exit 1; }
+
+      - name: Host packages
+        run: sudo apt-get update -q && sudo apt-get install -qy --no-install-recommends build-essential bc cpio file rsync unzip wget squashfs-tools
+
+      - name: SDK
+        run: |
+          id=$(ci/sdk.sh id)
+          gh release download "sdk-$id" -p "sdk-$id.tar.gz*" -D "$RUNNER_TEMP"
+          (cd "$RUNNER_TEMP" && sha256sum -c "sdk-$id.tar.gz.sha256")
+          ci/sdk.sh install "$RUNNER_TEMP/sdk-$id.tar.gz"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kernel
+          path: ${{ runner.temp }}/kernel
+
+      # source tarballs only; every download is still checked against its .hash
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.BR2_DL_DIR }}
+          key: dl-${{ hashFiles('pins.mk', 'configs/erosq_defconfig', 'package/**/*.hash', 'patches/**') }}
+          restore-keys: dl-
+
+      - name: Build
+        run: ci/rootfs.sh "$RUNNER_TEMP/w" "$RUNNER_TEMP/kernel/kernel.version"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rootfs
+          path: ${{ runner.temp }}/w/out/
+          retention-days: 14
+
+  swu:
+    needs: [boot, rootfs]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write   # build provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Host packages
+        run: sudo apt-get update -q && sudo apt-get install -qy --no-install-recommends squashfs-tools cpio
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: ${{ runner.temp }}/in
+
+      - name: Build .swu
+        run: |
+          I=$RUNNER_TEMP/in; O=$RUNNER_TEMP/out; mkdir -p "$O"
+          itb=$(ls "$I"/kernel/erosq-*.itb)
+          cp "$itb" "$I/rootfs/rootfs.squashfs" "$I/uboot/u-boot-flash.bin" "$I/uboot/u-boot-spl.bin" "$O/"
+          board/erosq/swu/mk-erosq-swu.sh --unsigned "$itb" "$I/rootfs/rootfs.squashfs" "$O/erosq-unsigned.swu"
+          cpio -i --to-stdout sw-description < "$O/erosq-unsigned.swu" > "$O/sw-description"
+          (cd "$O" && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/out/*
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: swu
+          path: ${{ runner.temp }}/out/
+          retention-days: 14
