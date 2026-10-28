@@ -1,0 +1,16 @@
+#!/bin/sh
+# git pre-push hook: ci/anon-scan.sh on what each pushed ref adds, private tier
+# included. Install: ln -s ../../ci/pre-push .git/hooks/pre-push
+# Private patterns (one extended regex per line) live outside the repo, in
+# ${ANON_PATTERNS_FILE:-$HOME/.config/erosq/anon-patterns}.
+f=${ANON_PATTERNS_FILE:-$HOME/.config/erosq/anon-patterns}
+[ -r "$f" ] || { echo "pre-push: no $f (private tier); refusing to push" >&2; exit 1; }
+ANON_PATTERNS=$(cat "$f"); export ANON_PATTERNS
+z=0000000000000000000000000000000000000000
+while read -r _ lsha _ rsha; do
+	[ "$lsha" = $z ] && continue                      # deleting a ref
+	s=$(git rev-parse --show-toplevel)/ci/anon-scan.sh
+	base=$rsha
+	[ "$base" = $z ] && base=$(git merge-base "$1/main" "$lsha" 2>/dev/null)
+	if [ -n "$base" ]; then "$s" "$base" "$lsha"; else "$s" --root "$lsha"; fi || exit 1
+done

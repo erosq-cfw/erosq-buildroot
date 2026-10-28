@@ -1,0 +1,13 @@
+# Strings ci/anon-scan.sh accepts: a hit whose line contains one is ignored.
+# "file:<path>" accepts that file as a new image or binary.
+# USB gadget network (erosq-usbgadget) and its locally administered MACs
+192.168.7.1
+02:e0:4c:00:00:01
+02:e0:4c:00:00:02
+# upstream copyright lines
+andersen@codepoet.org
+# boot splash frame, 320x240 RGB565
+file:package/erosq-board/files/etc/splash.raw
+# the scanner's own patterns
+check "local path" '
+check "Claude trailer/link" '

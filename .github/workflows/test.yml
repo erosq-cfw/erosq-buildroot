@@ -1,0 +1,107 @@
+# Every push and PR: the anonymity scan (public tier always, private tier
+# when the org secret ANON_PATTERNS is available), shell syntax, and
+# tests/test_*.sh through ci/tests.sh (fails on any SKIP).
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  anon:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Scan
+        env:
+          ANON_PATTERNS: ${{ secrets.ANON_PATTERNS }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          [ -n "$ANON_PATTERNS" ] || echo "::notice::ANON_PATTERNS not available (fork PR?): public tier only"
+          if [ -n "$BASE" ] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            ci/anon-scan.sh "$BASE" HEAD
+          elif base=$(git merge-base origin/main HEAD 2>/dev/null) && [ "$base" != "$(git rev-parse HEAD)" ]; then
+            ci/anon-scan.sh "$base" HEAD      # new branch or force push
+          else
+            ci/anon-scan.sh --root HEAD
+          fi
+
+  shell:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: sh -n / bash -n
+        run: |
+          rc=0
+          while IFS= read -r f; do
+            case $(head -c 64 "$f" | head -1) in
+              '#!/bin/sh'* | '#!/usr/bin/env sh'*) sh -n "$f" || rc=1 ;;
+              '#!/bin/bash'* | '#!/usr/bin/env bash'*) bash -n "$f" || rc=1 ;;
+              *) continue ;;
+            esac
+            echo "$f" >> "$RUNNER_TEMP/shell-files"
+          done < <(git ls-files)
+          exit $rc
+
+      - name: No pull_request_target
+        run: "! git grep -n pull_request_target -- .github/workflows ':!.github/workflows/test.yml'"
+
+      - name: shellcheck (advisory until the warnings are fixed)
+        continue-on-error: true
+        run: xargs shellcheck -S warning < "$RUNNER_TEMP/shell-files"
+
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BR2_DL_DIR: ${{ github.workspace }}/../dl
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Host packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -qy --no-install-recommends build-essential bc cpio file rsync unzip wget \
+            flac qemu-user squashfs-tools wpasupplicant iproute2
+          # the qemu-mipsel and wpa_supplicant tests use unshare -r
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: SDK
+        run: |
+          id=$(ci/sdk.sh id)
+          gh release download "sdk-$id" -p "sdk-$id.tar.gz*" -D "$RUNNER_TEMP"
+          (cd "$RUNNER_TEMP" && sha256sum -c "sdk-$id.tar.gz.sha256")
+          ci/sdk.sh install "$RUNNER_TEMP/sdk-$id.tar.gz"
+
+      # read-only: firmware.yml's rootfs job owns this cache
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.BR2_DL_DIR }}
+          key: dl-${{ hashFiles('pins.mk', 'configs/erosq_defconfig', 'package/**/*.hash', 'patches/**') }}
+          restore-keys: dl-
+
+      - name: Tests
+        run: ci/tests.sh "$RUNNER_TEMP/t"
+
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-logs
+          path: ${{ runner.temp }}/t/logs/
+          retention-days: 7

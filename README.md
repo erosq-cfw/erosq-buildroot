@@ -166,6 +166,23 @@ patched MPD on the host and need `BR=` (a Buildroot tree that has been built
 once: they use its `output/host` meson/ninja and `dl/mpd/`) and `FLAC=` (any
 `.flac` file); both default to `../buildroot-2026.08` and `../test.flac`.
 
+`ci/tests.sh <dir>` sets all of that up (a patched Buildroot tree, a
+generated FLAC) and fails on any failure or `SKIP`; the `test` workflow runs
+it on every push and PR, next to `sh -n` and an advisory shellcheck.
+
+### Anonymity scan
+
+The `test` workflow also runs `ci/anon-scan.sh` on what each push or PR adds:
+local paths, Claude trailers, private IPv4, MAC and e-mail addresses,
+private keys, new images, new binaries over 64 KB and commit identities.
+Known-good strings go in `.anon-allow`. A second tier greps for private
+patterns (org secret `ANON_PATTERNS`) and prints only where they hit. Run
+both tiers before every push with the hook:
+
+```sh
+ln -s ../../ci/pre-push .git/hooks/pre-push   # patterns in ~/.config/erosq/anon-patterns
+```
+
 ## Licence
 
 MIT for our files; see [LICENSE](LICENSE). Buildroot, the patches to it, and
