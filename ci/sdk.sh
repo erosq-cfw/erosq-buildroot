@@ -3,7 +3,8 @@
 # Same steps locally and in CI.
 #   ci/sdk.sh id            print SDK_ID (changes when any toolchain input does)
 #   ci/sdk.sh build <dir>   fetch+verify Buildroot, patch, build; leaves
-#                           <dir>/sdk-<SDK_ID>.tar.gz
+#                           <dir>/sdk-<SDK_ID>.tar.gz and its sources,
+#                           <dir>/sdk-<SDK_ID>-legal-info.tar
 #   ci/sdk.sh install <tgz> unpack + relocate an SDK tarball to sdk/, where
 #                           erosq_defconfig expects it
 # Env: BR2_DL_DIR (download cache, optional). Parallelism is BR2_JLEVEL (0 = nproc).
@@ -34,7 +35,12 @@ build)
 	make -C "$BR" O="$W/out" BR2_EXTERNAL="$EXT" erosq_sdk_defconfig
 	make -C "$BR" O="$W/out" ${BR2_DL_DIR:+BR2_DL_DIR="$BR2_DL_DIR"} sdk
 	mv "$W"/out/images/*_sdk-buildroot.tar.gz "$W/sdk-$(sdk_id).tar.gz"
-	ls -l "$W/sdk-$(sdk_id).tar.gz"
+	# GPL: the corresponding source (gcc, binutils, musl, ... with our patches)
+	# ships next to the binaries, as legal-info (sources/ and host-sources/)
+	make -C "$BR" O="$W/out" ${BR2_DL_DIR:+BR2_DL_DIR="$BR2_DL_DIR"} legal-info
+	tar -C "$W/out" --sort=name --owner=0 --group=0 --numeric-owner \
+		--mtime="@$SOURCE_DATE_EPOCH" -cf "$W/sdk-$(sdk_id)-legal-info.tar" legal-info
+	ls -l "$W/sdk-$(sdk_id).tar.gz" "$W/sdk-$(sdk_id)-legal-info.tar"
 	;;
 install)
 	rm -rf "$EXT/sdk" && mkdir "$EXT/sdk"

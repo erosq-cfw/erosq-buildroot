@@ -68,17 +68,20 @@ jobs:
         if: steps.have.outputs.skip != 'true' && github.ref == 'refs/heads/main'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: ${{ runner.temp }}/sdk/sdk-${{ steps.id.outputs.sdk_id }}.tar.gz
+          subject-path: |
+            ${{ runner.temp }}/sdk/sdk-${{ steps.id.outputs.sdk_id }}.tar.gz
+            ${{ runner.temp }}/sdk/sdk-${{ steps.id.outputs.sdk_id }}-legal-info.tar
 
       - name: Publish prerelease
         if: steps.have.outputs.skip != 'true' && github.ref == 'refs/heads/main'
         run: |
           id=${{ steps.id.outputs.sdk_id }}
           f=$RUNNER_TEMP/sdk/sdk-$id.tar.gz
-          (cd "$(dirname "$f")" && sha256sum "sdk-$id.tar.gz" > "sdk-$id.tar.gz.sha256")
-          gh release create "sdk-$id" "$f" "$f.sha256" --prerelease --target "$GITHUB_SHA" \
+          src=$RUNNER_TEMP/sdk/sdk-$id-legal-info.tar
+          (cd "$(dirname "$f")" && sha256sum "sdk-$id.tar.gz" "sdk-$id-legal-info.tar" > "sdk-$id.tar.gz.sha256")
+          gh release create "sdk-$id" "$f" "$src" "$f.sha256" --prerelease --target "$GITHUB_SHA" \
             --title "Toolchain SDK $id" \
-            --notes "Buildroot SDK from configs/erosq_sdk_defconfig at $GITHUB_SHA. Used by the release builds as BR2_TOOLCHAIN_EXTERNAL_CUSTOM."
+            --notes "Buildroot SDK from configs/erosq_sdk_defconfig at $GITHUB_SHA. Used by the release builds as BR2_TOOLCHAIN_EXTERNAL_CUSTOM. Source code for every package in it (gcc, binutils, musl, ...) with the patches applied: sdk-$id-legal-info.tar."
 
       - name: Upload artifact (dispatch on a branch)
         if: steps.have.outputs.skip != 'true' && github.ref != 'refs/heads/main'
