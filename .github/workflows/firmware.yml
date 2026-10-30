@@ -26,7 +26,7 @@ jobs:
   boot:
     uses: ./.github/workflows/boot.yml
     with:
-      cache: ${{ inputs.cache != false }}
+      cache: ${{ inputs.cache || github.event_name == 'push' }}
 
   rootfs:
     needs: boot
@@ -61,7 +61,7 @@ jobs:
 
       # source tarballs only; every download is still checked against its .hash
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: inputs.cache != false
+        if: inputs.cache || github.event_name == 'push'   # push: no inputs
         with:
           path: ${{ env.BR2_DL_DIR }}
           key: dl-${{ hashFiles('pins.mk', 'configs/erosq_defconfig', 'package/**/*.hash', 'patches/**') }}

@@ -38,10 +38,13 @@ KVER=$VER-g$(git -C "$K" rev-parse --short=10 HEAD)
 # gates (from the 2f kernel build)
 fail() { echo "FATAL: $*" >&2; exit 1; }
 ! grep -qi 'warning' "$O/build.log" || fail "compiler/kbuild warnings (see build.log)"
-# the build may only refresh the compiler banner in the committed .config
-# shellcheck disable=SC2143 # grep -q would SIGPIPE the pipeline under pipefail
-[ -z "$(git -C "$K" diff -U0 HEAD -- .config | grep '^[-+]CONFIG' | grep -v '^[-+]CONFIG_CC_VERSION_TEXT=')" ] ||
-	fail ".config changed during the build: $(git -C "$K" diff --stat HEAD)"
+# the build may only refresh the compiler banner and the host rustc probes
+# (CONFIG_RUST is off and the image has no IKCONFIG) in the committed .config
+grep -q '^CONFIG_RUST=y' "$K/.config" && fail "CONFIG_RUST is on: the rustc probes matter"
+D=$(git -C "$K" diff -U0 HEAD -- .config | grep '^[-+]CONFIG' |
+	grep -v -e '^[-+]CONFIG_CC_VERSION_TEXT=' -e '^[-+]CONFIG_RUSTC_' || true)
+[ -z "$D" ] || fail ".config changed during the build:
+$D"
 grep -qx '# CONFIG_MODULES is not set' "$K/.config" || fail "CONFIG_MODULES is on: modules would not ship"
 "${CROSS}readelf" -h "$K/vmlinux" | grep -q 'little endian' || fail "vmlinux is big-endian"
 
