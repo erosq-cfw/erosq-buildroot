@@ -6,7 +6,17 @@ name: firmware
 
 on:
   workflow_dispatch:
+    inputs:
+      cache:
+        description: use the download and ccache caches (repro.yml turns them off)
+        type: boolean
+        default: true
   workflow_call:
+    inputs:
+      cache:
+        description: use the download and ccache caches (repro.yml turns them off)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -15,6 +25,8 @@ permissions:
 jobs:
   boot:
     uses: ./.github/workflows/boot.yml
+    with:
+      cache: ${{ inputs.cache != false }}
 
   rootfs:
     needs: boot
@@ -49,6 +61,7 @@ jobs:
 
       # source tarballs only; every download is still checked against its .hash
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: inputs.cache != false
         with:
           path: ${{ env.BR2_DL_DIR }}
           key: dl-${{ hashFiles('pins.mk', 'configs/erosq_defconfig', 'package/**/*.hash', 'patches/**') }}

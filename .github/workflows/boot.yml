@@ -4,7 +4,17 @@ name: boot
 
 on:
   workflow_dispatch:
+    inputs:
+      cache:
+        description: use the download and ccache caches (repro.yml turns them off)
+        type: boolean
+        default: true
   workflow_call:
+    inputs:
+      cache:
+        description: use the download and ccache caches (repro.yml turns them off)
+        type: boolean
+        default: true
   push:
     branches: [main]
     paths:
@@ -43,6 +53,7 @@ jobs:
         run: ci/sdk-fetch.sh "$RUNNER_TEMP"
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: inputs.cache != false
         with:
           path: .ccache
           key: ccache-${{ matrix.target }}-${{ hashFiles('pins.mk') }}

@@ -1,0 +1,43 @@
+# Weekly reproducibility check: rebuild the latest published release tag with
+# no caches (firmware.yml, cache: false) and compare every sha256 in its
+# SHA256SUMS with the release's. Any difference fails this run.
+name: repro
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write   # dispatch firmware.yml on the tag and read its run
+
+jobs:
+  repro:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Rebuild the latest release
+        run: |
+          tag=$(gh release list --exclude-drafts --exclude-pre-releases -L 1 --json tagName --jq '.[0].tagName // empty')
+          [ -n "$tag" ] || { echo "::notice::no published release yet"; exit 0; }
+          echo "tag=$tag" >> "$GITHUB_ENV"
+          since=$(date -u +%FT%TZ)
+          gh workflow run firmware.yml --ref "$tag" -f cache=false
+          for _ in $(seq 30); do
+            id=$(gh run list -w firmware.yml -e workflow_dispatch -L 5 --json databaseId,createdAt,headBranch \
+              --jq "[.[] | select(.headBranch == \"$tag\" and .createdAt >= \"$since\")][0].databaseId // empty")
+            [ -n "$id" ] && break
+            sleep 10
+          done
+          [ -n "$id" ] || { echo "::error::firmware.yml run for $tag did not start"; exit 1; }
+          echo "run: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$id"
+          gh run watch "$id" --exit-status --interval 120 > /dev/null
+          gh run download "$id" -n swu -D new
+          gh release download "$tag" -p SHA256SUMS -D old
+          diff <(sort old/SHA256SUMS) <(sort new/SHA256SUMS) ||
+            { echo "::error::$tag does not reproduce (diff above: < release, > rebuild)"; exit 1; }
+          echo "$tag reproduces: $(wc -l < old/SHA256SUMS) files identical"
