@@ -1,6 +1,7 @@
 # Full firmware build: kernel + U-Boot (boot.yml), the rootfs with its
-# legal-info and SBOM (ci/rootfs.sh), and the UNSIGNED .swu with a build
-# provenance attestation. Signing happens on the maintainer's machine.
+# legal-info and SBOM (ci/rootfs.sh), the SD-card bundle (ci/sdbundle.sh),
+# and the UNSIGNED .swu with a build provenance attestation. Signing happens
+# on the maintainer's machine.
 name: firmware
 
 on:
@@ -62,6 +63,15 @@ jobs:
           path: ${{ runner.temp }}/w/out/
           retention-days: 14
 
+      - name: SD-card bundle
+        run: ci/sdbundle.sh "$RUNNER_TEMP/w" "$RUNNER_TEMP/sdbundle"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sdbundle
+          path: ${{ runner.temp }}/sdbundle/
+          retention-days: 14
+
   swu:
     needs: [boot, rootfs]
     runs-on: ubuntu-24.04
@@ -87,7 +97,7 @@ jobs:
         run: |
           I=$RUNNER_TEMP/in; O=$RUNNER_TEMP/out; mkdir -p "$O"
           itb=$(ls "$I"/kernel/erosq-*.itb)
-          cp "$itb" "$I/rootfs/rootfs.squashfs" "$I/uboot/u-boot-flash.bin" "$I/uboot/u-boot-spl.bin" "$O/"
+          cp "$itb" "$I/rootfs/rootfs.squashfs" "$I/uboot/u-boot-flash.bin" "$I/uboot/u-boot-spl.bin" "$I/sdbundle/erosq-sd-bundle.zip" "$O/"
           board/erosq/swu/mk-erosq-swu.sh --unsigned "$itb" "$I/rootfs/rootfs.squashfs" "$O/erosq-unsigned.swu"
           cpio -i --to-stdout sw-description < "$O/erosq-unsigned.swu" > "$O/sw-description"
           (cd "$O" && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
