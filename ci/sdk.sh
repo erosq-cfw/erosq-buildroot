@@ -14,9 +14,10 @@ EXT=$(cd "$(dirname "$0")/.." && pwd)
 . "$EXT/pins.mk"
 
 sdk_id() {
-	# ponytail: only these files define the toolchain; add more if a Buildroot
-	# patch outside patches/buildroot ever touches it.
-	(cd "$EXT" && cat pins.mk configs/erosq_sdk_defconfig patches/buildroot/*.patch) |
+	# ponytail: only these define the toolchain; add more if a Buildroot
+	# patch outside patches/buildroot ever touches it. Only pins.mk's
+	# BUILDROOT_* lines: other pin bumps must not publish a new SDK.
+	(cd "$EXT" && grep '^BUILDROOT_' pins.mk && cat configs/erosq_sdk_defconfig patches/buildroot/*.patch) |
 		sha256sum | cut -c1-12
 }
 
