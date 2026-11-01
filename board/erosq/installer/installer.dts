@@ -1,0 +1,61 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Device tree of the EROS Q installer: the firmware's own DT plus what the
+ * installer needs on top. Build it in the kernel tree, next to the file it
+ * includes (arch/mips/boot/dts/ingenic/).
+ */
+#include "x1000-erosq-min.dts"
+
+/ {
+	chosen {
+		/*
+		 * The stock bootloader passes no command line, so this is the whole
+		 * of it. No `earlycon`: on a bootloader that leaves UART2 clock-gated
+		 * an early console write hangs the bus. console=tty0 shows progress
+		 * on the panel; ttyS2 is last so /dev/console stays the UART.
+		 */
+		bootargs = "console=tty0 console=ttyS2,115200n8";
+	};
+};
+
+&sfc {
+	flash@0 {
+		partitions {
+			/* the installer writes these */
+			partition@0 {
+				/delete-property/ read-only;
+			};
+			partition@20000 {
+				/delete-property/ read-only;
+			};
+			/*
+			 * Overlapping views of the same chip, used by name only:
+			 * the whole chip (backup and restore), and the stock
+			 * firmware's regions that mode=stock and mode=uninstall
+			 * write: its bootloader, its kernel (which the stock
+			 * bootloader reads 4 MiB of, at 0x300000), and its two UBI
+			 * devices (rootfs and data).
+			 */
+			partition@wholechip {
+				label = "wholechip";
+				reg = <0x0 0x8000000>;
+			};
+			partition@stockboot {
+				label = "stockboot";
+				reg = <0x0 0x300000>;
+			};
+			partition@stockof {
+				label = "stockof";
+				reg = <0x300000 0x600000>;
+			};
+			partition@stockrootfs {
+				label = "stockrootfs";
+				reg = <0x1000000 0x4000000>;
+			};
+			partition@stockdata {
+				label = "stockdata";
+				reg = <0x5000000 0x3000000>;
+			};
+		};
+	};
+};
