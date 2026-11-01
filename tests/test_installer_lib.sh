@@ -206,5 +206,34 @@ done
 il_pass_drops_mode backup; ck "PASS of backup keeps the mode file" 1 $?
 il_pass_drops_mode ""; ck "no mode: nothing to remove" 1 $?
 
+# --- il_entry (no mode file: who booted the installer) ---
+ck "entry: our U-Boot, update.upt on the card -> menu, no install" menu "$(il_entry 1 1)"
+ck "entry: our U-Boot, no update.upt -> menu" menu "$(il_entry 1 "")"
+ck "entry: stock bootloader + update.upt -> upt"  upt  "$(il_entry 0 1)"
+ck "entry: stock bootloader, nothing -> none"     none "$(il_entry 0 "")"
+
+# --- il_key_press (one 16-byte input_event as od -An -tu2 prints it) ---
+ev() { printf "\\005\\0\\0\\0\\0\\0\\0\\0\\$1\\0\\$2\\0\\$3\\0\\0\\0" | od -An -tu2; } # ev <type> <code> <value>, octal
+ck "key: press of Play"        164 "$(il_key_press "$(ev 001 244 001)")"
+il_key_press "$(ev 001 244 000)" >/dev/null; ck "key: a release is not a press" 1 $?
+il_key_press "$(ev 001 244 002)" >/dev/null; ck "key: an auto-repeat is not a press" 1 $?
+il_key_press "$(ev 000 000 000)" >/dev/null; ck "key: a sync event is not a press" 1 $?
+il_key_press "$(ev 002 000 001)" >/dev/null; ck "key: a REL event is not a press" 1 $?
+il_key_press "$(printf 'abc' | od -An -tu2)" >/dev/null; ck "key: a short read is not a press" 1 $?
+il_key_press "" >/dev/null; ck "key: nothing read is not a press" 1 $?
+ck "key code above 255" 352 "$(il_key_press "$(printf '\0\0\0\0\0\0\0\0\001\0\140\001\001\0\0\0' | od -An -tu2)")"
+
+# --- il_menu_key / il_menu_move ---
+ck "Vol+ up"   up     "$(il_menu_key 115)"; ck "Prev up"   up   "$(il_menu_key 165)"
+ck "Vol- down" down   "$(il_menu_key 114)"; ck "Next down" down "$(il_menu_key 163)"
+ck "Play"      select "$(il_menu_key 164)"; ck "Back"      back "$(il_menu_key 158)"
+ck "Menu does nothing"  none "$(il_menu_key 139)"
+ck "Power does nothing" none "$(il_menu_key 116)"
+ck "move down"          2 "$(il_menu_move 1 4 down)"
+ck "move down wraps"    1 "$(il_menu_move 4 4 down)"
+ck "move up"            3 "$(il_menu_move 4 4 up)"
+ck "move up wraps"      4 "$(il_menu_move 1 4 up)"
+ck "select stays"       2 "$(il_menu_move 2 4 select)"
+
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

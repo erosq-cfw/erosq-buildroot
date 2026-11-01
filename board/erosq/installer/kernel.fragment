@@ -2,8 +2,9 @@
 # It must stay under the stock bootloader's 4 MiB read (check-uimage.sh), so
 # everything an installer does not need is off. It keeps NAND (SFC + SPI-NAND
 # + UBI), the SD card (MMC + VFAT), loop + ISO9660 (to mount update.upt), the
-# PMIC (AXP2101: poweroff) and the panel with a framebuffer console, so the
-# owner can watch the log on the screen: there is no serial port for them.
+# PMIC (AXP2101: poweroff), the panel with a framebuffer console, so the
+# owner can watch the log on the screen (there is no serial port for them),
+# and the buttons for the rescue menu.
 CONFIG_BLK_DEV_INITRD=y
 CONFIG_MIPS_RAW_APPENDED_DTB=y
 # CONFIG_MIPS_NO_APPENDED_DTB is not set
@@ -16,7 +17,21 @@ CONFIG_CMDLINE="console=ttyS2,115200n8"
 # CONFIG_SOUND is not set
 # CONFIG_NET is not set
 # CONFIG_USB_SUPPORT is not set
-# CONFIG_INPUT is not set
+# The buttons, for the rescue menu: the gpio-keys node of the board DT and
+# evdev. VT selects INPUT anyway, so INPUT was never really off; the rest of
+# the input drivers are.
+CONFIG_INPUT=y
+CONFIG_INPUT_EVDEV=y
+CONFIG_INPUT_KEYBOARD=y
+CONFIG_KEYBOARD_GPIO=y
+# CONFIG_KEYBOARD_GPIO_POLLED is not set
+# CONFIG_INPUT_MISC is not set
+# CONFIG_INPUT_MOUSE is not set
+# CONFIG_INPUT_MOUSEDEV is not set
+# CONFIG_INPUT_JOYSTICK is not set
+# CONFIG_INPUT_TABLET is not set
+# CONFIG_INPUT_TOUCHSCREEN is not set
+# CONFIG_SERIO is not set
 # CONFIG_HID_SUPPORT is not set
 # CONFIG_ZRAM is not set
 # CONFIG_ZSMALLOC is not set

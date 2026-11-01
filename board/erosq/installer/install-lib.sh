@@ -209,3 +209,52 @@ il_pass_drops_mode() {
     esac
     return 1
 }
+
+# il_entry <uboot-ours 0|1> <update.upt-on-card 0|1> -> menu|upt|none
+# What a boot with NO mode file does. The kernel command line cannot say who
+# booted the installer (the DT bootargs win), so the U-Boot on the chip
+# decides. The stock bootloader boots it only from the stock kernel partition,
+# where the stock updater has just put it: install from update.upt, as
+# before. Our U-Boot boots it from the card (both slots failed, or the owner
+# asked for it): show the rescue menu, and write nothing unasked.
+il_entry() {
+    if [ "$1" = 1 ]; then
+        echo menu
+    elif [ "$2" = 1 ]; then
+        echo upt
+    else
+        echo none
+    fi
+}
+
+# il_key_press <od -An -tu2 of one input_event> -> the key code of a press.
+# rc 1 for anything else (a release, an auto-repeat, a sync or a short read).
+# On this 32-bit kernel an input_event is 16 bytes: sec and usec (4 bytes
+# each), type and code (2 each), value (4), read here as eight u16 words.
+il_key_press() {
+    # shellcheck disable=SC2086
+    set -- $1
+    [ $# -eq 8 ] && [ "$5" = 1 ] && [ "$7" = 1 ] && [ "$8" = 0 ] || return 1
+    echo "$6"
+}
+
+# il_menu_key <key code> -> up|down|select|back|none (the gpio-keys codes of
+# the board DT). MENU and POWER do nothing here.
+il_menu_key() {
+    case "$1" in
+        115|165) echo up ;;      # Volume Up, Previous
+        114|163) echo down ;;    # Volume Down, Next
+        164)     echo select ;;  # Play/Pause
+        158)     echo back ;;    # Back
+        *)       echo none ;;
+    esac
+}
+
+# il_menu_move <index> <count> <up|down> -> the new 1-based index, wrapping.
+il_menu_move() {
+    case "$3" in
+        up)   if [ "$1" -le 1 ]; then echo "$2"; else echo $(($1 - 1)); fi ;;
+        down) if [ "$1" -ge "$2" ]; then echo 1; else echo $(($1 + 1)); fi ;;
+        *)    echo "$1" ;;
+    esac
+}

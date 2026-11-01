@@ -96,17 +96,145 @@ else
     bail "FATAL: SD did not mount as vfat (exFAT card? no card? bad card?) -- no result.txt is possible"
 fi
 
-# Two entry paths share this init:
+# --- rescue menu ---------------------------------------------------------------
+# Shown when our U-Boot boots this installer from the card with no mode file.
+# It writes nothing by itself: each choice that writes the chip asks for a
+# second press of Play, then writes the mode file and carries on below as
+# that mode, through the same gates. No key for MENU_IDLE seconds powers off.
+TTY=/dev/tty0
+MENU_IDLE=120
+ITEMS="reinstall restore uninstall poweroff"
+
+uboot_is_ours() { # the U-Boot on the chip carries our A/B boot env
+    _ub=$(il_mtd_by_name uboot) || return 1
+    nanddump "/dev/$_ub" 2>/dev/null | grep -q abselect
+}
+show() { printf '%s\n' "$*" > "$TTY" 2>/dev/null; } # the panel, not rate-limited like kmsg
+label() {
+    case "$1" in
+        reinstall) echo "Reinstall from update.upt (erases the player)" ;;
+        restore)   echo "Restore erosq-install/flash.img" ;;
+        uninstall) echo "Uninstall: back to stock (erosq-install/stock.upt)" ;;
+        usb)       echo "USB drive mode (the card on a computer)" ;;
+        poweroff)  echo "Power off" ;;
+    esac
+}
+draw() { # draw <selected index>
+    printf '\033[2J\033[H' > "$TTY" 2>/dev/null
+    show "EROS Q rescue"
+    show ""
+    _i=0
+    for _it in $ITEMS; do
+        _i=$((_i + 1))
+        if [ "$_i" -eq "$1" ]; then show "> $(label "$_it")"; else show "  $(label "$_it")"; fi
+    done
+    show ""
+    show "Vol+/Prev, Vol-/Next: move   Play: choose"
+}
+read_key() { # read_key -> up|down|select|back; rc 1 after MENU_IDLE s with no key
+    while :; do
+        _ev=$(timeout "$MENU_IDLE" dd if="$EV" bs=16 count=1 2>/dev/null | od -An -tu2)
+        [ -n "$_ev" ] || return 1
+        _k=$(il_key_press "$_ev") || continue
+        _a=$(il_menu_key "$_k")
+        [ "$_a" = none ] || { echo "$_a"; return 0; }
+    done
+}
+idle_off() {
+    rec INFO rescue "no key for $MENU_IDLE s (powering off)"
+    halt_forever
+}
+confirm() { # confirm <what>: rc 0 on a second press of Play
+    show ""
+    show "$1"
+    show "Play again: go ahead.  Any other key: back."
+    _a=$(read_key) || idle_off
+    [ "$_a" = select ]
+}
+need() { # need <file> <message>: rc 1 (and say so) when <file> is missing
+    [ -f "$1" ] && return 0
+    show ""; show "$2"; show "Press Play or Back."
+    read_key >/dev/null || idle_off
+    return 1
+}
+pick() { # pick <item>: rc 0 once the mode file is written, 1 = back to the menu
+    case "$1" in
+    reinstall)
+        UPT=$(il_find_ci "$SD" update.upt) || UPT=
+        need "$UPT" "No update.upt at the card root." || return 1
+        confirm "Reinstall erases the player (the card is kept)." || return 1
+        _m=upt ;;
+    restore)
+        need "$DIR/flash.img" "No erosq-install/flash.img on the card." || return 1
+        confirm "Restore writes the whole chip from flash.img." || return 1
+        _m=restore ;;
+    uninstall)
+        need "$DIR/flash-backup.img" "No erosq-install/flash-backup.img on the card." || return 1
+        need "$DIR/stock.upt" "No erosq-install/stock.upt (the official update) on the card." || return 1
+        confirm "Uninstall puts the stock firmware back." || return 1
+        _m=uninstall ;;
+    poweroff)
+        rec INFO rescue "power off chosen"
+        halt_forever ;;
+    *)
+        return 1 ;;
+    esac
+    printf '%s\n' "$_m" > "$DIR/mode" || { show "Cannot write the mode file."; return 1; }
+    sync
+    rec INFO rescue "chose $1 (mode=$_m)"
+    printf '\033[2J\033[H' > "$TTY" 2>/dev/null
+}
+rescue_menu() {
+    mkdir -p "$DIR" || bail "FATAL: cannot create $DIR on the SD card (write-protected? full?)"
+    EV=
+    i=0
+    while [ $i -lt 10 ]; do
+        for e in /sys/class/input/event*; do
+            [ "$(cat "$e/device/name" 2>/dev/null)" = gpio-keys ] && EV=/dev/input/${e##*/}
+        done
+        [ -n "$EV" ] && [ -e "$EV" ] && break
+        EV=; sleep 1; i=$((i + 1))
+    done
+    [ -n "$EV" ] || { rec FAIL rescue "no gpio-keys input device; no menu (powering off)"; halt_forever; }
+    rec INFO rescue "no mode file, booted by our U-Boot: rescue menu"
+    _n=0; for _it in $ITEMS; do _n=$((_n + 1)); done
+    _sel=1
+    while :; do
+        draw "$_sel"
+        _a=$(read_key) || idle_off
+        case "$_a" in
+            up|down) _sel=$(il_menu_move "$_sel" "$_n" "$_a") ;;
+            select)
+                _i=0
+                for _it in $ITEMS; do
+                    _i=$((_i + 1)); [ "$_i" -eq "$_sel" ] && break
+                done
+                pick "$_it" && return 0 ;;
+        esac
+    done
+}
+
+# Three entry paths share this init:
 #  - the developer path: an erosq-install/ directory with a `mode` file.
 #  - the end-user path: nothing but update.upt at the card root, because the
 #    stock updater just wrote this installer into the stock kernel partition
 #    and rebooted.
-# The presence of erosq-install/mode tells them apart.
+#  - the rescue path: no mode file, and our U-Boot booted this installer from
+#    the card. See il_entry.
+# The presence of erosq-install/mode tells the first apart; without it, the
+# U-Boot on the chip tells the other two apart.
 UPT=$(il_find_ci "$SD" update.upt) || UPT=
-if [ ! -f "$DIR/mode" ] && [ -n "$UPT" ]; then
-    mkdir -p "$DIR" || bail "FATAL: cannot create $DIR on the SD card (write-protected? full?)"
-    printf 'upt\n' > "$DIR/mode" || bail "FATAL: cannot write $DIR/mode on the SD card"
-    sync
+if [ ! -f "$DIR/mode" ]; then
+    UB_OURS=0
+    uboot_is_ours && UB_OURS=1
+    case "$(il_entry "$UB_OURS" "${UPT:+1}")" in
+    menu)
+        rescue_menu ;;
+    upt)
+        mkdir -p "$DIR" || bail "FATAL: cannot create $DIR on the SD card (write-protected? full?)"
+        printf 'upt\n' > "$DIR/mode" || bail "FATAL: cannot write $DIR/mode on the SD card"
+        sync ;;
+    esac
 fi
 
 if [ ! -d "$DIR" ]; then
