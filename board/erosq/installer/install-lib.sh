@@ -143,3 +143,12 @@ il_upt_product() {
     done < "$1"
     return 1
 }
+
+# il_fail_action <status> <self_boot> -> reboot|poweroff
+# What finish does after recording <status>. PASS reboots into what was
+# written. A failure reboots only when the next boot cannot be this
+# installer again (self_boot=0): the retry guard is armed just before the
+# first erase, so a failure before it would otherwise loop unattended.
+il_fail_action() {
+    if [ "$1" != PASS ] && [ "$2" = 1 ]; then echo poweroff; else echo reboot; fi
+}

@@ -6,8 +6,9 @@
 #     reboot loop.
 #  2. Log to /dev/kmsg (the panel) and to result.txt on the card: the end
 #     user has no serial console.
-#  3. One-shot marker: a second entry after a failure gives up rather than
-#     loop.
+#  3. One-shot marker, armed just before the first erase: a second entry
+#     after a failed write gives up rather than loop. A failure before it
+#     powers off when a reboot would boot this installer again.
 #  4. Every exit path boots something or powers off.
 mount -t proc  none /proc
 mount -t sysfs none /sys
@@ -19,6 +20,7 @@ SD=/mnt
 DIR=$SD/erosq-install
 RESULT=$DIR/result.txt
 MARKER=$DIR/.attempted
+SELF_BOOT=0
 
 say() { echo "INSTALLER: $*"; }
 rec() { # rec <status> <step> <detail>
@@ -45,6 +47,10 @@ halt_forever() { # cut power and never return
 finish() { # finish <status> <step> <detail>
     rec "$1" "$2" "$3"
     [ "$1" = PASS ] && rm -f "$MARKER"
+    if [ "$(il_fail_action "$1" "$SELF_BOOT")" = poweroff ]; then
+        say "powering off"
+        halt_forever
+    fi
     unwind
     sleep 3
     reboot -f
@@ -109,50 +115,60 @@ fi
 MODE=$(il_parse_mode "$DIR/mode"); MODE_RC=$?
 [ "$MODE_RC" -eq 0 ] || MODE=invalid
 
-# UPT_MODE=1 means "a reboot returns to this same installer". The developer
-# modes are entered on a unit that still boots something else, so they
-# reboot.
-UPT_MODE=0
+# SELF_BOOT=1 means "a reboot returns to this same installer". In the upt
+# path the stock bootloader boots it from the stock kernel partition. In
+# mode=uninstall it is there too once the whole-chip image is back, until
+# the stock kernel replaces it. The developer modes are entered on a unit
+# that still boots something else, so they reboot.
 case "$MODE" in
-    upt) UPT_MODE=1 ;;
+    upt|uninstall) SELF_BOOT=1 ;;
     invalid)
         if [ "$MODE_RC" -eq 2 ]; then
             # Absent mode file: not a developer card, so the upt path. Do not
             # fall back to $UPT here; see il_parse_mode.
-            UPT_MODE=1
+            SELF_BOOT=1
         else
             # A mode file with garbage in it says nothing about how we
             # booted: fall back to the weaker signal.
-            [ -n "$UPT" ] && UPT_MODE=1
+            [ -n "$UPT" ] && SELF_BOOT=1
         fi
         ;;
 esac
 
+# The marker says a previous run got as far as erasing. The chip may be
+# half written, so do not start over unattended: a person checks
+# result.txt and deletes the marker.
 if il_should_abort "$MARKER"; then
     # In the upt path nobody is there to clear the marker, and a reboot boots
     # this installer again: power off, and result.txt survives for the user.
-    if [ "$UPT_MODE" -eq 1 ]; then
+    if [ "$SELF_BOOT" -eq 1 ]; then
         rec FAIL guard "prior attempt marker present; refusing to retry (powering off)"
         halt_forever
     fi
     finish FAIL guard "prior attempt marker present; refusing to retry"
 fi
-# The marker is the retry guard; a silent failure to create it (full card,
-# read-only mount) would let a deterministic fault loop unattended.
-: > "$MARKER"; sync
-if [ ! -f "$MARKER" ]; then
-    # In the upt path an unarmed guard can never fire, so a deterministic
-    # failure would loop forever with nobody to notice. Power off. The
-    # developer path warns and continues.
-    if [ "$UPT_MODE" -eq 1 ]; then
-        rec FAIL marker "could not create $MARKER; retry guard NOT armed (powering off)"
-        halt_forever
+
+# step_arm runs after every gate and immediately before the first erase, so
+# a run refused by a gate (no space, a bad payload) leaves no marker and can
+# simply be run again once the card is fixed.
+step_arm() {
+    # The marker is the retry guard; a silent failure to create it (full
+    # card, read-only mount) would let a deterministic fault loop unattended.
+    : > "$MARKER"; sync
+    if [ ! -f "$MARKER" ]; then
+        # When a reboot returns here an unarmed guard can never fire, so a
+        # deterministic failure would loop forever with nobody to notice.
+        # Power off. The developer path warns and continues.
+        if [ "$SELF_BOOT" -eq 1 ]; then
+            rec FAIL marker "could not create $MARKER; retry guard NOT armed (powering off)"
+            halt_forever
+        fi
+        rec WARN marker "could not create $MARKER; retry guard NOT armed"
     fi
-    rec WARN marker "could not create $MARKER; retry guard NOT armed"
-fi
+}
 
 if [ "$MODE" = invalid ]; then
-    if [ "$UPT_MODE" -eq 1 ]; then
+    if [ "$SELF_BOOT" -eq 1 ]; then
         rec FAIL mode "unreadable or unknown mode (powering off)"
         halt_forever
     fi
@@ -328,6 +344,7 @@ install)
     # first, then U-Boot, then the SPL last: writing our SPL first would
     # leave a window with our SPL, no U-Boot and no menu.
     U=$(il_mtd_by_name ubi) || finish FAIL write-ubi "no ubi mtd"
+    step_arm
     ubiformat "/dev/$U" -f "$DIR/nand.ubi" -y || finish FAIL write-ubi "ubiformat failed"
     rec PASS write-ubi "ubiformat ok"
     ubiattach -m "${U#mtd}" -d 0              || finish FAIL verify-ubi "ubiattach failed"
@@ -378,7 +395,7 @@ upt)
     # with the .upt still missing. The usual way here is a user deleting
     # update.upt to free space after a "160 MiB free" failure.
     if [ -z "$UPT" ]; then
-        rec FAIL upt "no update.upt at the card root; put it back and delete $MARKER (powering off)"
+        rec FAIL upt "no update.upt at the card root; put it back (powering off)"
         halt_forever
     fi
 
@@ -448,6 +465,7 @@ upt)
 
     # Same order as mode=install: UBI, then U-Boot, then the SPL last.
     U=$(il_mtd_by_name ubi) || finish FAIL write-ubi "no ubi mtd"
+    step_arm
     ubiformat "/dev/$U" -f "$P_UBI" -y || finish FAIL write-ubi "ubiformat failed"
     rec PASS write-ubi "ubiformat ok"
     ubiattach -m "${U#mtd}" -d 0       || finish FAIL verify-ubi "ubiattach failed"
@@ -485,6 +503,7 @@ stock)
     stock_member uboot.bin;  S_UB=$SM
     stock_member uimage.bin; S_UI=$SM
     stock_member system.ubi; S_SYS=$SM
+    step_arm
     w stockboot write-stockboot "$S_UB" || finish FAIL stock "bootloader write failed"
     w stockof   write-stockof   "$S_UI" || finish FAIL stock "OF kernel write failed"
     # The stock firmware keeps two UBI devices, rootfs at 0x1000000 (64 MiB)
@@ -526,6 +545,7 @@ restore)
     else
         rec INFO gate-md5 "no md5sums entry for flash.img; writing it unverified"
     fi
+    step_arm
     w wholechip restore-flash "$DIR/flash.img" || finish FAIL restore "flash.img write failed"
     finish PASS restore "whole-chip image restored"
     ;;

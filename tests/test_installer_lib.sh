@@ -140,5 +140,11 @@ printf 'version={\n        ver=1\n}\n' > "$T/v.txt"
 il_upt_product "$T/v.txt" >/dev/null; ck "upt_product no name" 1 $?
 il_upt_product "$T/nope" >/dev/null; ck "upt_product missing file" 1 $?
 
+# --- il_fail_action (what finish does; the guard is armed only before the first erase) ---
+ck "PASS reboots"                      reboot   "$(il_fail_action PASS 0)"
+ck "PASS reboots on a self-booting unit" reboot "$(il_fail_action PASS 1)"
+ck "FAIL reboots elsewhere"            reboot   "$(il_fail_action FAIL 0)"
+ck "FAIL powers off when a reboot boots the installer" poweroff "$(il_fail_action FAIL 1)"
+
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
