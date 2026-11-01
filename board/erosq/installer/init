@@ -485,6 +485,23 @@ step_restore_flash() {
     w wholechip restore-flash "$DIR/flash.img" || finish FAIL restore "flash.img write failed"
 }
 
+step_restore_chip() {
+    w wholechip restore-chip "$BK" || finish FAIL uninstall "flash-backup.img write failed"
+}
+
+step_retire() {
+    # The stock OS runs a root update.upt by itself, so rename ours or it
+    # installs erosq again. And remove the mode file, or the next boot of
+    # this installer would uninstall again. FAT lookups ignore case, so
+    # $UPT is the card's update.upt however it is spelt.
+    if [ -n "$UPT" ]; then
+        mv -f "$UPT" "$SD/update.upt.done" || finish FAIL retire "cannot rename $UPT"
+    fi
+    rm -f "$DIR/mode" || finish FAIL retire "cannot remove $DIR/mode"
+    sync
+    rec PASS retire "update.upt renamed update.upt.done, mode removed"
+}
+
 case "$MODE" in
 backup)
     # nanddump skips bad blocks, so with BB>0 the dump is compacted, not a
@@ -592,7 +609,7 @@ stock)
     # one the stock Firmware Update entry boots. The official update has no
     # image for it, and mode=install and mode=upt format a region that
     # spans it. Say so in result.txt rather than claim a factory restore.
-    rec WARN stock-recovery "recovery (0x900000, 7 MiB) NOT written -- no factory image exists for it; on a unit that ran mode=install/mode=upt the stock Firmware Update entry will fail until a mode=restore from a whole-chip backup"
+    rec WARN stock-recovery "recovery (0x900000, 7 MiB) NOT written -- no factory image exists for it; on a unit that ran mode=install/mode=upt the stock Firmware Update entry will fail until a mode=uninstall or mode=restore from a whole-chip backup"
     finish PASS stock "bootloader + OF kernel + rootfs restored; recovery NOT restored (see stock-recovery)"
     ;;
 restore)
@@ -607,7 +624,43 @@ restore)
         rec INFO gate-md5 "no md5sums entry for flash.img; writing it unverified"
     fi
     run_plan restore
+    # Remove the mode file. An image taken by mode=upt has this installer in
+    # the stock kernel partition under the stock bootloader, so it boots
+    # again next, and a mode=restore left on the card would restore forever.
+    rm -f "$DIR/mode" || rec WARN restore "cannot remove $DIR/mode"
+    sync
     finish PASS restore "whole-chip image restored"
+    ;;
+uninstall)
+    # Undo an install: the whole-chip backup taken before it goes back, then
+    # the stock kernel from the official update (stock.upt) over this
+    # installer, which the stock updater had already written there when
+    # mode=upt took the backup. The recovery partition comes back with the
+    # backup, so the stock Firmware Update entry works again.
+    # Entered from our firmware, which boots erosq.itb once; that part lives
+    # outside this repository.
+    [ "$BB" -eq 0 ] || finish FAIL bad-blocks "chip has $BB bad blocks; linear images unsafe"
+    [ -f "$BK" ] || finish FAIL uninstall "missing $BK"
+    BSZ=$(stat -c%s "$BK") || finish FAIL uninstall "cannot stat flash-backup.img"
+    [ "$BSZ" -eq "$CHIP" ] || finish FAIL uninstall "flash-backup.img is $BSZ bytes, expected $CHIP"
+    # flash-backup.md5 is written only once a backup was proven equal to the
+    # chip before any write, so it is what shows this image predates the
+    # install. Without it, refuse.
+    REC=$(md5_in "$BKMD5" flash-backup.img) \
+        || finish FAIL uninstall "no flash-backup.md5: nothing shows flash-backup.img was taken before the install"
+    il_md5_ok "$BK" "$REC" || finish FAIL uninstall "flash-backup.img does not match flash-backup.md5"
+    rec PASS gate-md5 "flash-backup.img $REC"
+    stock_upt_open
+    stock_member uimage.bin; S_UI=$SM
+    il_mtd_by_name wholechip >/dev/null || finish FAIL uninstall "no wholechip mtd"
+    OF=$(il_mtd_by_name stockof) || finish FAIL uninstall "no stockof mtd"
+    OFSZ=$(cat "/sys/class/mtd/$OF/size" 2>/dev/null) || OFSZ=
+    UISZ=$(stat -c%s "$S_UI") || UISZ=
+    case "$OFSZ$UISZ" in ''|*[!0-9]*) finish FAIL uninstall "cannot read the size of stockof or uimage.bin" ;; esac
+    [ "$UISZ" -le "$OFSZ" ] || finish FAIL uninstall "uimage.bin is $UISZ bytes, stockof holds $OFSZ"
+
+    run_plan uninstall
+    finish PASS uninstall "whole-chip backup and stock kernel written"
     ;;
 *)
     finish FAIL mode "unreachable"

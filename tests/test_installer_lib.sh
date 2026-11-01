@@ -159,7 +159,7 @@ pos() { # pos <word> <list...> -> 1-based index of the first match, 0 if none
     echo 0
 }
 writes() { case "$1" in erase-*|write-*|restore-*|seed-*) return 0 ;; esac; return 1; }
-for m in install upt stock restore; do
+for m in install upt stock restore uninstall; do
     p=$(il_write_plan "$m"); ck "plan $m exists" 0 $?
     n=0; before=ok; after=; seen=
     for s in $p; do
@@ -191,6 +191,13 @@ ck "verdict bad, no record"        bad     "$(il_backup_verdict "$A" "$B" "")"
 ck "verdict bad, other record"     bad     "$(il_backup_verdict "$A" "$B" "$C")"
 ck "verdict bad, empty backup md5" bad     "$(il_backup_verdict "" "" "")"
 ck "verdict bad, empty backup md5 and chip" bad "$(il_backup_verdict "" "$B" "")"
+
+# --- mode=uninstall ---
+printf 'uninstall\n' > "$T/m"; ck "mode uninstall" uninstall "$(il_parse_mode "$T/m")"
+printf ' uninstall \r\n' > "$T/m"; ck "mode uninstall ws/CRLF" uninstall "$(il_parse_mode "$T/m")"
+il_parse_mode "$T/m" >/dev/null; ck "mode uninstall rc" 0 $?
+printf 'uninstal\n' > "$T/m"; ck "mode uninstal (typo)" invalid "$(il_parse_mode "$T/m")"
+ck "plan uninstall" "arm restore-chip write-stockof retire" "$(il_write_plan uninstall)"
 
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

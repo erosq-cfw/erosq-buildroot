@@ -5,7 +5,7 @@
 # installer initramfs carries (each one is a symlink there; a missing one
 # fails silently).
 
-# il_parse_mode <modefile> -> backup|install|stock|restore|upt|invalid|absent
+# il_parse_mode <modefile> -> backup|install|stock|restore|upt|uninstall|invalid|absent
 # Return code: 0 for a recognized mode, 1 when the file exists but its content
 # is unreadable or unknown ("invalid"), 2 when the file does not exist at all
 # ("absent").
@@ -23,7 +23,7 @@ il_parse_mode() {
     [ -f "$1" ] || { echo absent; return 2; }
     _m=$(head -n1 "$1" | tr -d ' \t\r\n')
     case "$_m" in
-        backup|install|stock|restore|upt) echo "$_m"; return 0 ;;
+        backup|install|stock|restore|upt|uninstall) echo "$_m"; return 0 ;;
         *)                            echo invalid; return 1 ;;
     esac
 }
@@ -167,12 +167,15 @@ il_fail_action() {
 #           erosq.itb from the card, so a power loss there can be retried.
 #           Written the other way round, a power loss would leave the stock
 #           bootloader with no kernel. erosq.itb is removed on PASS only.
+#  uninstall: the whole-chip backup back, then the stock kernel over this
+#           installer, then retire update.upt and the mode file.
 il_write_plan() {
     case "$1" in
         install) echo "arm write-ubi verify-ubi erase-env write-uboot write-spl seed-env" ;;
         upt)     echo "copy-itb arm erase-env write-uboot write-spl write-ubi verify-ubi seed-env drop-itb" ;;
         stock)   echo "arm write-stockboot write-stockof write-stockubi" ;;
         restore) echo "arm restore-flash" ;;
+        uninstall) echo "arm restore-chip write-stockof retire" ;;
         *) return 1 ;;
     esac
 }
