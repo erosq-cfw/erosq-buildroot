@@ -36,11 +36,7 @@ cp "$B/u-boot.bin" "$B/spl/u-boot-spl.bin" .
 # the SPL loads exactly UBOOT_NAND_LEN; a bigger u-boot.bin would be cut off (brick)
 [ "$(stat -c %s u-boot.bin)" -le $((0x100000)) ] || fail "u-boot.bin is over 1 MiB"
 cp u-boot.bin u-boot-flash.bin && truncate -s $((0x100000)) u-boot-flash.bin
-# the A/B boot env must be compiled in (swupdate rollback depends on it)
-strings u-boot.bin > strings.txt
-for s in abselect altbootcmd boot_slot bootlimit; do
-	grep -q "$s" strings.txt || fail "default env lacks '$s'"
-done
-grep -m1 '^U-Boot 20' strings.txt | tee uboot.version
-rm strings.txt
+# the A/B boot env and the card fallback must be compiled in
+"$EXT/ci/uboot-env-check.sh" u-boot.bin
+strings u-boot.bin | grep -m1 '^U-Boot 20' | tee uboot.version
 ls -l "$O"
