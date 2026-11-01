@@ -279,5 +279,27 @@ ck "stock bootloader, no mode, no update.upt: powers off" poweroff "$(boot "$R")
 ck "stock bootloader, no mode, no update.upt: no menu" no "$(yes_ grep -q rescue "$R/mnt/$E/result.txt")"
 ck "stock bootloader, no mode, no update.upt: nothing written" "" "$(cat "$R/writes")"
 
+# --- the initramfs's busybox applets: what the rescue menu needs is linked -----------
+AP=$I/initramfs.applets
+for a in od timeout ln dd date; do
+	ck "applet $a is linked in the initramfs" yes "$(yes_ grep -qx "$a" "$AP")"
+done
+# init with only the listed applets (and the stub device tools) on PATH: a
+# menu that cancels a reinstall at its confirm, moves, and powers off. The
+# fake unit's own tools (bash for its stubs) come along; host coreutils do not.
+R=$T/bb; mkunit "$R"; mkupt "$R"; boot "$R" >/dev/null
+BB=$T/bbbin; mkdir -p "$BB"
+ln -s "$(command -v bash)" "$BB/bash"
+while read -r a; do
+	case "$a" in ''|'#'*) continue ;; esac
+	p=$(command -v "$a") && [ "${p#/}" != "$p" ] && ln -sf "$p" "$BB/$a"
+done < "$AP"
+printf '164\n158\n165\n164\n' > "$R/keys"
+rm -f "$R/action"
+PATH="$R/bin:$BB" "$TIMEOUT" 120 "$BB/sh" "$R/init" >/dev/null 2>&1
+ck "listed applets only: the menu reads keys and powers off" poweroff "$(cat "$R/action" 2>/dev/null)"
+ck "listed applets only: Power off chosen from the menu" "INFO|rescue|power off chosen" \
+	"$(tail -n1 "$R/mnt/$E/result.txt")"
+
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

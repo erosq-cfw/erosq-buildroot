@@ -1,0 +1,39 @@
+# The busybox applets the installer initramfs links into /bin, one per
+# line; the initramfs build makes /bin/<applet> -> busybox for each. This
+# busybox has no SH_STANDALONE, so an applet without its link is "not
+# found", and init cannot tell: without od the rescue menu never reads a
+# key. tests/test_installer_init.sh runs init with only these on PATH.
+sh
+ash
+echo
+cat
+ls
+mkdir
+rm
+mv
+cp
+ln
+sleep
+sync
+md5sum
+mount
+umount
+reboot
+poweroff
+dmesg
+head
+tail
+grep
+sed
+tr
+test
+true
+false
+printf
+date
+df
+dd
+od
+stat
+find
+timeout
