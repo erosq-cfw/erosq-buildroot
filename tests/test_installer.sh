@@ -292,4 +292,15 @@ sh "$I/check-payload.sh" "$T/magics.bin" >/dev/null 2>&1 || fail "check-payload 
 mkimage -A mips -O linux -T kernel -C gzip -a 0x80100000 -e 0x80100000 -n k \
 	-d "$T/clean.gz" "$T/clean.uImage" >/dev/null || fail "mkimage (clean)"
 sh "$I/check-payload.sh" "$T/clean.uImage" >/dev/null 2>&1 || fail "check-payload refused a clean uImage"
+
+# --- install-lib.sh ------------------------------------------------------------
+sh "$HERE/tests/test_installer_lib.sh" || fail "install-lib.sh unit tests"
+# il_upt_md5 and il_upt_product read the manifests build-upt.py writes
+for n in UPDATE.TXT VERSION.TXT; do
+	"$PY" "$T/read.py" "$T/a.upt" "$n" | tail -n +4 > "$T/$n" || fail "cannot read $n back"
+done
+got=$(sh -c '. "$1"; il_upt_md5 "$2" uimage.bin' sh "$I/install-lib.sh" "$T/UPDATE.TXT")
+[ "$got" = "$(md5 "$T/inst.uImage")" ] || fail "il_upt_md5 does not read build-upt.py's UPDATE.TXT"
+got=$(sh -c '. "$1"; il_upt_product "$2"' sh "$I/install-lib.sh" "$T/VERSION.TXT")
+[ "$got" = erosq_2024 ] || fail "il_upt_product does not read build-upt.py's VERSION.TXT"
 echo "PASS: installer tools"
