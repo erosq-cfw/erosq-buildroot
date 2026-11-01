@@ -169,6 +169,74 @@ deep "$T/bad.gz" "a corrupt gzip stream"
 # a bare magic number (a constant in a decoder) is not a stream
 { head -c 300000 /dev/zero; printf '\375\067zXZ\000 and \211LZO\000\r\n\032\n and 070701'; head -c 300 /dev/zero; } > "$T/consts"
 sh "$I/check-payload.sh" "$T/consts" >/dev/null 2>&1 || fail "check-payload refused bare magic numbers in a blob"
+# fail-open paths a security review found in eebb58b (each one was missed)
+psk() { printf 'network={\n psk="planted"\n}\n'; }
+os80() { # os80 <gz>: an OS byte the header check does not know; gzip -d does not care
+	printf '\200' | dd of="$1" bs=1 seek=9 conv=notrunc 2>/dev/null
+}
+yes 'firmware v2026.11.0' | head -c 20000 | gzip -9n > "$T/m1.gz"
+psk | gzip -9n > "$T/m2.gz"; os80 "$T/m2.gz"
+cat "$T/m1.gz" "$T/m2.gz" > "$T/multi.gz"
+gzip -dc "$T/multi.gz" | grep -q 'psk=' || fail "gzip -dc does not decode the second member (fixture)"
+deep "$T/multi.gz" "a Wi-Fi passphrase in the second member of a gzip stream"
+psk | gzip -9n > "$T/odd.gz"; os80 "$T/odd.gz"
+blob < "$T/odd.gz" > "$T/k-odd.bin"
+deep "$T/k-odd.bin" "a gzip stream inside a blob whose header fails the XFL/OS check"
+cat > "$T/newc.py" <<'EOF'
+import sys
+# newc.py <out> <name> <mode-octal> <data-file|-> ...: a newc cpio, members verbatim
+out = open(sys.argv[1], "wb")
+a = sys.argv[2:]
+def pad(n): out.write(b"\0" * (-n % 4))
+ms = [(a[i].encode(), int(a[i + 1], 8), b"" if a[i + 2] == "-" else open(a[i + 2], "rb").read())
+      for i in range(0, len(a), 3)] + [(b"TRAILER!!!", 0, b"")]
+for ino, (nm, md, dt) in enumerate(ms, 1):
+    h = b"070701" + b"".join(b"%08X" % v for v in
+        (ino, md, 0, 0, 1, 0, len(dt), 0, 0, 0, 0, len(nm) + 1, 0))
+    out.write(h + nm + b"\0"); pad(110 + len(nm) + 1)
+    out.write(dt); pad(len(dt))
+EOF
+nc() { "$PY" "$T/newc.py" "$@" || fail "newc.py"; }
+psk | gzip -9n > "$T/s.gz"; printf 'clean\n' > "$T/clean.txt"
+# a later member with the same path must not hide the first one's data
+nc "$T/dup.cpio" etc 040755 - etc/w 0100644 "$T/s.gz" etc/w 0100644 "$T/clean.txt"
+blob < "$T/dup.cpio" > "$T/k-dup.bin"
+deep "$T/k-dup.bin" "a passphrase in a cpio member that a later member with the same path replaces"
+# a member that is not a regular file but carries data
+nc "$T/fifo.cpio" etc 040755 - etc/p 010644 "$T/s.gz"
+blob < "$T/fifo.cpio" > "$T/k-fifo.bin"
+deep "$T/k-fifo.bin" "a passphrase in the data of a fifo cpio member"
+# a member with no name that carries data (dropped, never written out)
+nc "$T/dot.cpio" . 0100644 "$T/s.gz"
+blob < "$T/dot.cpio" > "$T/k-dot.bin"
+deep "$T/k-dot.bin" "a passphrase in a nameless cpio member"
+# a stream inside an archive but outside every regular member's data (here a
+# link target) is not covered by unpacking the archive: it is unpacked itself
+# (a gzip header and deflate body with no NUL in them: a link target cannot
+# hold one; with no trailer it cannot unpack either, which is a FAIL too)
+"$PY" - "$T/l.gz" <<'EOF' || fail "no NUL-free gzip stream (fixture)"
+import sys, zlib
+for n in range(1000):
+    c = zlib.compressobj(9, zlib.DEFLATED, -15)
+    # the end-of-block code is seven 0 bits: drop the last byte(s)
+    body = (c.compress(b'network={\n psk="planted"\n}\n#%d\n' % n) + c.flush()).rstrip(b"\0")
+    # FLG = FTEXT: a 0 flag byte would be a NUL
+    g = b"\x1f\x8b\x08\x01\x5f\x5f\x5f\x5f\x02\x03" + body
+    if b"\0" not in g:
+        open(sys.argv[1], "wb").write(g)
+        sys.exit(0)
+sys.exit(1)
+EOF
+nc "$T/lnk.cpio" etc 040755 - etc/l 0120777 "$T/l.gz"
+blob < "$T/lnk.cpio" > "$T/k-lnk.bin"
+deep "$T/k-lnk.bin" "a gzip stream that is a cpio link target"
+# bytes after a uImage payload ship too
+head -c 1000 /dev/zero | gzip -9n > "$T/c0.gz"
+mkimage -A mips -O linux -T kernel -C gzip -a 0x80100000 -e 0x80100000 -n k \
+	-d "$T/c0.gz" "$T/c0.uImage" >/dev/null || fail "mkimage (trailer)"
+sh "$I/check-payload.sh" "$T/c0.uImage" >/dev/null 2>&1 || fail "check-payload refused a clean uImage (trailer fixture)"
+cat "$T/c0.uImage" "$T/s.gz" > "$T/trail.uImage"
+deep "$T/trail.uImage" "a passphrase in a gzip stream after the uImage payload"
 # and a clean compressed installer passes
 { head -c 300000 /dev/zero; head -c 1000 /dev/zero | gzip -9n; } | gzip -9n > "$T/clean.gz"
 mkimage -A mips -O linux -T kernel -C gzip -a 0x80100000 -e 0x80100000 -n k \

@@ -4,7 +4,7 @@
 # Every input is unpacked as deep as it goes before it is scanned: a secret
 # inside a compressed initramfs is as public as one in plain text.
 #   .upt (ISO9660)  members, via PYTHON (default python3) with pycdlib
-#   uImage          payload (header stripped)
+#   uImage          payload (header stripped), and any bytes after it
 #   FIT / ITB       each image (dumpimage)
 #   squashfs        extracted tree
 #   UBI image       volumes                    } unpack-stream.py (PYTHON),
@@ -37,6 +37,14 @@ hit() { echo "check-payload: FAIL: $*" >&2; echo x >> "$T/failed"; }
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT INT TERM
 
 magic() { od -An -tx1 -N"$2" -j"${3:-0}" "$1" 2>/dev/null | tr -d ' \n'; }
+
+in_range() { # in_range <offset> <file of "start end" lines>
+	local a b
+	while read -r a b; do
+		[ "$1" -ge "$a" ] && [ "$1" -lt "$b" ] && return 0
+	done < "$2"
+	return 1
+}
 
 kind() { # the container <file> is by its header, or nothing
 	case "$(magic "$1" 4)" in
@@ -81,7 +89,10 @@ unpack() { # unpack <file> <depth>: extracts into <file>.d, recursively
 		[ -n "$k" ] || { hit "$f: dumpimage -l lists no image"; return; }
 		[ $((k + 64)) -le "$(stat -c %s "$f")" ] || { hit "$f: the payload ends early (truncated)"; return; }
 		tail -c +65 "$f" | head -c "$k" > "$o/payload" || { hit "$f: cannot cut the payload out"; return; }
-		unpack "$o/payload" "$n" ;;
+		unpack "$o/payload" "$n"
+		# and whatever follows the payload: nothing reads it, but it ships
+		tail -c +$((k + 65)) "$f" > "$o/trailer" || { hit "$f: cannot cut the trailer out"; return; }
+		unpack "$o/trailer" "$n" ;;
 	FIT)
 		k=$(grep -c '^ *Image [0-9]' "$f.l")
 		[ "$k" -gt 0 ] || { hit "$f: dumpimage -l lists no images"; return; }
@@ -105,18 +116,26 @@ EOF
 		each "$o/iso" "$n" ;;
 	*)
 		[ "$(wc -l < "$f.offs")" -le "$MAXSTREAMS" ] || { hit "$f: $c, over the $MAXSTREAMS it unpacks"; return; }
-		k=0 end=0
+		k=0 end=0 rng=
 		while read -r fmt off; do
-			# inside a stream already unpacked: a part of it, not a stream
-			[ "$off" -ge "$end" ] || continue
+			# inside a stream already unpacked: a part of it, not a stream.
+			# Inside a cpio archive, only inside the data of a regular member
+			# written out (and so unpacked and scanned); a magic in a header,
+			# a name or a link target is unpacked on its own.
+			if [ "$off" -lt "$end" ]; then
+				[ -z "$rng" ] && continue
+				in_range "$off" "$rng" && continue
+			fi
 			k=$((k + 1))
-			if ! end=$("$PY" "$US" unpack "$fmt" "$f" "$off" "$o/s$k" 2> "$o/s$k.err" < /dev/null); then
+			if ! "$PY" "$US" unpack "$fmt" "$f" "$off" "$o/s$k" > "$o/s$k.out" 2> "$o/s$k.err" < /dev/null; then
 				hit "$f: $fmt at offset $off cannot be unpacked: $(tail -1 "$o/s$k.err")"
-				end=0
-			elif [ -d "$o/s$k" ]; then
-				each "$o/s$k" "$n"
+				[ "$off" -lt "$end" ] || end=0
 			else
-				unpack "$o/s$k" "$n"
+				if [ "$off" -ge "$end" ]; then
+					end=$(head -1 "$o/s$k.out") rng=
+					[ "$fmt" != cpio ] || { tail -n +2 "$o/s$k.out" > "$o/s$k.rng"; rng=$o/s$k.rng; }
+				fi
+				if [ -d "$o/s$k" ]; then each "$o/s$k" "$n"; else unpack "$o/s$k" "$n"; fi
 			fi
 		done < "$f.offs" ;;
 	esac

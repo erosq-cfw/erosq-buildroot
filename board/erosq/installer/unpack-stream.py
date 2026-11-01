@@ -8,8 +8,10 @@
                                                   (a file, or a directory for
                                                   cpio and ubi), and prints
                                                   the offset where the stream
-                                                  ends; exit 1: it cannot be
-                                                  unpacked
+                                                  ends, then for cpio one
+                                                  "<start> <end>" line per
+                                                  regular member written out;
+                                                  exit 1: it cannot be unpacked
 
 Formats: gzip, xz, lzma (.lzma "alone"), zstd, bzip2, lz4 (legacy, as Linux
 uses it), lzo (lzop), cpio (newc, crc, odc), ubi (an ubinize image).
@@ -18,7 +20,8 @@ A file that STARTS with a format's magic is that format and must unpack.
 Inside a file, a magic is a stream when its header is one a decoder accepts:
 a magic number on its own also turns up as a constant in decoders, in
 compressed data and in code. The header checks are:
-  gzip   deflate, no reserved flag bit, XFL 0/2/4, OS 0-13 or 255
+  gzip   deflate, no reserved flag bit, XFL 0/2/4, OS 0-13 or 255; or
+         any gzip header whose first 1 MiB decodes without an error
   xz     stream flags with a valid CRC32
   lzma   props 0x5d, a dictionary of 2^n or 3*2^(n-1) bytes (4 KiB-1 GiB);
          inside a file only with the size unknown (8 x 0xff), as `lzma -9`
@@ -31,11 +34,13 @@ compressed data and in code. The header checks are:
   cpio   the magic and all of the header's hex (newc/crc) or octal (odc) digits
   ubi    at the start of a file only
 The member headers inside one cpio archive are not listed as archives, and
-check-payload.sh skips whatever lies inside a stream it has unpacked.
-Every stream that passes is unpacked by its own decoder up to its own end
-(data after it is ignored), and a stream that then fails to decode, ends
-early or decodes to more than MAXOUT bytes is an error: the caller fails
-closed. Only the Python standard library, plus the zstd, lz4 and lzop tools.
+check-payload.sh skips whatever lies inside a stream it has unpacked (inside
+a cpio archive, only the data of the regular members written out). Every
+stream that passes is unpacked by its own decoder up to its own end (data
+after it is ignored; for gzip, every member that follows), and a stream that
+then fails to decode, ends early or decodes to more than MAXOUT bytes is an
+error: the caller fails closed. A cpio member that is not a regular file or a
+link but carries data is an error too. Only the Python standard library, plus the zstd, lz4 and lzop tools.
 """
 import bz2
 import lzma
@@ -66,7 +71,24 @@ def ok_gzip(d, o, start):
     if start:
         return True
     h = d[o:o + 10]
-    return len(h) == 10 and not h[3] & 0xe0 and h[8] in (0, 2, 4) and (h[9] <= 13 or h[9] == 255)
+    if len(h) == 10 and not h[3] & 0xe0 and h[8] in (0, 2, 4) and (h[9] <= 13 or h[9] == 255):
+        return True
+    # gzip -d ignores XFL and OS: a header that fails the check above but
+    # decodes is a stream all the same
+    return gzip_trial(d, o)
+
+
+TRIAL = 1 << 20
+
+def gzip_trial(d, o):
+    """the first TRIAL bytes at <o> decode as gzip without an error, to some
+    output or to the end of the member"""
+    z = zlib.decompressobj(31)
+    try:
+        out = z.decompress(d[o:o + TRIAL], 4096)
+    except zlib.error:
+        return False
+    return bool(out) or z.eof
 
 
 def ok_xz(d, o, start):
@@ -205,6 +227,26 @@ def py_stream(dec, d, o, out, name):
     """stdlib decompressor objects: they say where their stream ends"""
     s = Sink(out)
     try:
+        return into(dec, d, o, s, name)
+    finally:
+        s.close()
+
+
+def un_gzip(d, o, out):
+    """every member, as gzip -d decodes them: a gzip magic right after a member
+    is the next member of the same stream"""
+    s = Sink(out)
+    try:
+        while True:
+            o = into(Zlib(), d, o, s, "gzip")
+            if d[o:o + 2] != b"\x1f\x8b":
+                return o
+    finally:
+        s.close()
+
+
+def into(dec, d, o, s, name):
+    try:
         while not dec.eof:
             if o >= len(d):
                 raise Bad("%s stream ends early (truncated)" % name)
@@ -217,8 +259,6 @@ def py_stream(dec, d, o, out, name):
         return o - len(dec.unused_data)
     except (OSError, EOFError, zlib.error, lzma.LZMAError, ValueError) as e:
         raise Bad("%s: %s" % (name, e))
-    finally:
-        s.close()
 
 
 class Zlib:
@@ -370,23 +410,43 @@ def cpio_walk(d, o, member=None):
 
 
 def un_cpio(d, o, out):
+    """unpacks to <out>; returns the end and, in RANGES, the data range of each
+    regular member written out (only those bytes are unpacked and scanned)"""
     os.makedirs(out)
+    RANGES.clear()
 
     def member(name, mode, e, data_end):
         p = safe_path(out, name)
         if p is None:
+            if data_end > e:
+                raise Bad("cpio member %r has no name but carries data" % name)
             return
-        if stat.S_ISDIR(mode):
-            os.makedirs(p, exist_ok=True)
-        elif stat.S_ISLNK(mode):
+        if stat.S_ISLNK(mode):
             os.symlink(d[e:data_end].decode("utf-8", "surrogateescape"), p)
         elif stat.S_ISREG(mode):
-            # a later hard link carries the data; an earlier one is empty
-            if data_end > e or not os.path.exists(p):
-                with open(p, "wb") as f:
-                    f.write(d[e:data_end])
-        # device nodes, fifos and sockets carry no data: nothing to scan
+            # hard links: an earlier link is empty and a later one carries the
+            # data. Data never replaces data: a second member with the same
+            # path is written next to the first, so both are scanned.
+            if os.path.exists(p) and (data_end == e or os.path.getsize(p)):
+                if data_end == e:
+                    return
+                n = 1
+                while os.path.lexists("%s.dup%d" % (p, n)):
+                    n += 1
+                p = "%s.dup%d" % (p, n)
+            with open(p, "wb") as f:
+                f.write(d[e:data_end])
+            if data_end > e:
+                RANGES.append((e, data_end))
+        elif data_end > e:
+            # directories, devices, fifos and sockets carry no data
+            raise Bad("cpio member %r is not a regular file but carries %d bytes" % (name, data_end - e))
+        elif stat.S_ISDIR(mode):
+            os.makedirs(p, exist_ok=True)
     return cpio_walk(d, o, member)
+
+
+RANGES = []
 
 
 def un_ubi(d, o, out):
@@ -428,7 +488,7 @@ def un_ubi(d, o, out):
 
 
 DECODERS = {
-    "gzip": lambda d, o, out: py_stream(Zlib(), d, o, out, "gzip"),
+    "gzip": un_gzip,
     "xz": lambda d, o, out: py_stream(lzma.LZMADecompressor(lzma.FORMAT_XZ), d, o, out, "xz"),
     "lzma": lambda d, o, out: py_stream(lzma.LZMADecompressor(lzma.FORMAT_ALONE), d, o, out, "lzma"),
     "bzip2": lambda d, o, out: py_stream(bz2.BZ2Decompressor(), d, o, out, "bzip2"),
@@ -450,7 +510,10 @@ def main(a):
             for name, o in scan(a[1]):
                 print(name, o)
         elif len(a) == 5 and a[0] == "unpack":
+            RANGES.clear()
             print(unpack(a[1], a[2], int(a[3]), a[4]))
+            for r in RANGES:
+                print(*r)
         else:
             sys.exit(__doc__)
     except Bad as e:
