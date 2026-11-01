@@ -166,7 +166,8 @@ il_fail_action() {
 #           our U-Boot is what boots: with no bootable slot yet, it loads
 #           erosq.itb from the card, so a power loss there can be retried.
 #           Written the other way round, a power loss would leave the stock
-#           bootloader with no kernel. erosq.itb is removed on PASS only.
+#           bootloader with no kernel. On PASS only, drop-itb moves it to
+#           erosq-install/installer.uImage, where the rescue entry loads it.
 #  uninstall: the whole-chip backup back, then the stock kernel over this
 #           installer, then retire update.upt and the mode file.
 il_write_plan() {
@@ -195,4 +196,16 @@ il_backup_verdict() {
     else
         echo bad
     fi
+}
+
+# il_pass_drops_mode <mode> -> rc 0 when a PASS of <mode> removes the mode
+# file. A mode file left on the card runs again the next time this installer
+# boots, and the installer stays on the card as the rescue system: a stale
+# install or upt would wipe the unit (and /data) with nobody asking for it, a
+# stale restore or uninstall would write the chip again.
+il_pass_drops_mode() {
+    case "$1" in
+        install|upt|restore|uninstall) return 0 ;;
+    esac
+    return 1
 }

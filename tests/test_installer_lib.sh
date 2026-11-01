@@ -199,5 +199,12 @@ il_parse_mode "$T/m" >/dev/null; ck "mode uninstall rc" 0 $?
 printf 'uninstal\n' > "$T/m"; ck "mode uninstal (typo)" invalid "$(il_parse_mode "$T/m")"
 ck "plan uninstall" "arm restore-chip write-stockof retire" "$(il_write_plan uninstall)"
 
+# --- il_pass_drops_mode (a mode file left on the card runs again) ---
+for m in install upt restore uninstall; do
+    il_pass_drops_mode "$m"; ck "PASS of $m removes the mode file" 0 $?
+done
+il_pass_drops_mode backup; ck "PASS of backup keeps the mode file" 1 $?
+il_pass_drops_mode ""; ck "no mode: nothing to remove" 1 $?
+
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

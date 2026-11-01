@@ -295,6 +295,7 @@ sh "$I/check-payload.sh" "$T/clean.uImage" >/dev/null 2>&1 || fail "check-payloa
 
 # --- install-lib.sh ------------------------------------------------------------
 sh "$HERE/tests/test_installer_lib.sh" || fail "install-lib.sh unit tests"
+bash "$HERE/tests/test_installer_init.sh" || fail "init runs on a fake unit"
 # il_upt_md5 and il_upt_product read the manifests build-upt.py writes
 for n in UPDATE.TXT VERSION.TXT; do
 	"$PY" "$T/read.py" "$T/a.upt" "$n" | tail -n +4 > "$T/$n" || fail "cannot read $n back"

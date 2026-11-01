@@ -46,7 +46,15 @@ halt_forever() { # cut power and never return
 }
 finish() { # finish <status> <step> <detail>
     rec "$1" "$2" "$3"
-    [ "$1" = PASS ] && rm -f "$MARKER"
+    if [ "$1" = PASS ]; then
+        # The mode file goes first: should power fail between the two, a
+        # marker without a mode file only refuses, it never writes again.
+        if il_pass_drops_mode "$MODE"; then
+            rm -f "$DIR/mode" || rec WARN mode "cannot remove $DIR/mode"
+            sync
+        fi
+        rm -f "$MARKER"
+    fi
     if [ "$(il_fail_action "$1" "$SELF_BOOT")" = poweroff ]; then
         say "powering off"
         halt_forever
@@ -445,11 +453,14 @@ step_seed_env() {
 }
 
 step_drop_itb() {
-    # Reached on the way to PASS only: a failure keeps erosq.itb for the
-    # retry.
-    rm -f "$SD/erosq.itb" || finish FAIL drop-itb "cannot remove erosq.itb"
+    # Reached on the way to PASS only: a failure keeps erosq.itb at the root
+    # for the retry. On PASS it is moved, not deleted: this installer is
+    # also the rescue system, and the rescue entry loads it from
+    # erosq-install/installer.uImage.
+    mv -f "$SD/erosq.itb" "$DIR/installer.uImage" \
+        || finish FAIL drop-itb "cannot move erosq.itb to $DIR/installer.uImage"
     sync
-    rec PASS drop-itb "erosq.itb removed"
+    rec PASS drop-itb "erosq.itb moved to erosq-install/installer.uImage"
 }
 
 step_write_stockboot() {
@@ -624,11 +635,10 @@ restore)
         rec INFO gate-md5 "no md5sums entry for flash.img; writing it unverified"
     fi
     run_plan restore
-    # Remove the mode file. An image taken by mode=upt has this installer in
-    # the stock kernel partition under the stock bootloader, so it boots
-    # again next, and a mode=restore left on the card would restore forever.
-    rm -f "$DIR/mode" || rec WARN restore "cannot remove $DIR/mode"
-    sync
+    # finish removes the mode file (il_pass_drops_mode). An image taken by
+    # mode=upt has this installer in the stock kernel partition under the
+    # stock bootloader, so it boots again next, and a mode=restore left on
+    # the card would restore forever.
     finish PASS restore "whole-chip image restored"
     ;;
 uninstall)
