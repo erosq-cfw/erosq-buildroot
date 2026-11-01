@@ -152,3 +152,44 @@ il_upt_product() {
 il_fail_action() {
     if [ "$1" != PASS ] && [ "$2" = 1 ]; then echo poweroff; else echo reboot; fi
 }
+
+# il_write_plan <mode> -> the steps that write the chip, in order. init runs
+# step_<name> for each one (with - read as _). `arm` creates the retry
+# marker and comes immediately before the first step that erases anything.
+#  install: the order proven on hardware. UBI first, then U-Boot, then the
+#           SPL last: the Rockbox bootloader this mode is entered from lives
+#           in our SPL partition, so until the SPL is written a failure can
+#           be retried from its menu.
+#  upt:     the installer goes onto the card as erosq.itb, then U-Boot, the
+#           SPL, then UBI. ubiformat erases this installer (the ubi
+#           partition spans the stock kernel partition), and from then on
+#           our U-Boot is what boots: with no bootable slot yet, it loads
+#           erosq.itb from the card, so a power loss there can be retried.
+#           Written the other way round, a power loss would leave the stock
+#           bootloader with no kernel. erosq.itb is removed on PASS only.
+il_write_plan() {
+    case "$1" in
+        install) echo "arm write-ubi verify-ubi erase-env write-uboot write-spl seed-env" ;;
+        upt)     echo "copy-itb arm erase-env write-uboot write-spl write-ubi verify-ubi seed-env drop-itb" ;;
+        stock)   echo "arm write-stockboot write-stockof write-stockubi" ;;
+        restore) echo "arm restore-flash" ;;
+        *) return 1 ;;
+    esac
+}
+
+# il_backup_verdict <backup-md5> <chip-md5> <record-md5|""> -> fresh|earlier|bad
+#  fresh:   the backup equals a re-read of the chip.
+#  earlier: it does not, but it equals flash-backup.md5, which is written
+#           only once a backup has been proven equal to the chip. So a
+#           previous run proved this backup and then wrote part of the chip
+#           (a power loss mid-write); the retry may continue.
+#  bad:     anything else.
+il_backup_verdict() {
+    if [ -n "$1" ] && [ "$1" = "$2" ]; then
+        echo fresh
+    elif [ -n "$1" ] && [ "$1" = "$3" ]; then
+        echo earlier
+    else
+        echo bad
+    fi
+}

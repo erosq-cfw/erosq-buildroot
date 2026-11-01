@@ -275,103 +275,163 @@ stock_member() { # stock_member <lowercase-name>: md5-gate a member; sets SM to 
     rec PASS gate-md5 "$1 $_exp"
 }
 
-case "$MODE" in
-backup)
-    # nanddump skips bad blocks, so with BB>0 the dump is compacted, not a
-    # 1:1 image. BB is already in result.txt; such a backup must not be
-    # trusted as a raw restore image.
-    D=$(il_mtd_by_name wholechip) || finish FAIL backup "no wholechip mtd"
-    nanddump -f "$DIR/flash-backup.img" "/dev/$D" >/dev/null 2>&1 \
-        || finish FAIL backup "nanddump failed"
-    M=$(md5sum "$DIR/flash-backup.img"); M=${M%% *}
-    finish PASS backup "$M"
-    ;;
-install)
-    [ "$BB" -eq 0 ] || finish FAIL bad-blocks "chip has $BB bad blocks; linear images unsafe"
+# --- whole-chip backup --------------------------------------------------------
+BK=$DIR/flash-backup.img
+BKMD5=$DIR/flash-backup.md5
+CHIP=134217728
 
-    # Never clobber the existing backup: a second run would otherwise
-    # replace the only untouched image with a dump of what run 1 wrote.
+record_backup() { # record_backup <md5>: flash-backup.md5, for a proven backup only
+    printf '%s  flash-backup.img\n' "$1" > "$BKMD5.tmp" && mv -f "$BKMD5.tmp" "$BKMD5" || return 1
+    sync
+    [ "$(md5_in "$BKMD5" flash-backup.img)" = "$1" ]
+}
+
+backup_gate() { # take the backup or keep the one there, and prove it
     D=$(il_mtd_by_name wholechip) || finish FAIL backup "no wholechip mtd"
-    if [ -f "$DIR/flash-backup.img" ]; then
+    REC=$(md5_in "$BKMD5" flash-backup.img) || REC=
+    # Never overwrite an existing backup: a second run would replace the
+    # only untouched image with a dump of what run 1 wrote.
+    if [ -f "$BK" ]; then
         KEPT=1
     else
+        # A record without its image means the proven backup was moved
+        # away. A dump now may be of a half-written chip, and it would
+        # replace the record of the original. Refuse.
+        [ -z "$REC" ] || finish FAIL backup "flash-backup.md5 is on the card but flash-backup.img is not; put the backup back"
         KEPT=0
-        nanddump -f "$DIR/flash-backup.img" "/dev/$D" >/dev/null 2>&1 \
+        nanddump -f "$BK" "/dev/$D" >/dev/null 2>&1 \
             || finish FAIL backup "nanddump failed (backup runs BEFORE any write)"
         sync
     fi
-    # Verify the backup, fresh or kept, the same way: `[ -f ]` alone accepts
-    # a truncated or corrupt leftover, and the writes below need a proven
-    # copy on record.
-    BSZ=$(stat -c%s "$DIR/flash-backup.img") || finish FAIL backup "cannot stat flash-backup.img"
-    [ "$BSZ" -eq 134217728 ] \
-        || finish FAIL backup "flash-backup.img is $BSZ bytes, expected 134217728 (card full? corrupt leftover?)"
-    BM=$(md5sum "$DIR/flash-backup.img"); BM=${BM%% *}
-    RM=$(nanddump -l 134217728 "/dev/$D" 2>/dev/null | md5sum); RM=${RM%% *}
-    [ "$BM" = "$RM" ] || finish FAIL backup "backup does not match a re-read of the chip"
-    if [ "$KEPT" -eq 1 ]; then
-        rec INFO backup "flash-backup.img already present; verified and kept the existing one"
-    else
-        rec PASS backup "$BM"
-    fi
+    # Verify it, fresh or kept, the same way, against a fresh re-read of the
+    # chip: a size check alone lets a short FAT write or a stale leftover
+    # through.
+    BSZ=$(stat -c%s "$BK") || finish FAIL backup "cannot stat flash-backup.img"
+    [ "$BSZ" -eq "$CHIP" ] \
+        || finish FAIL backup "flash-backup.img is $BSZ bytes, expected $CHIP (card full? corrupt leftover?)"
+    BM=$(md5sum "$BK"); BM=${BM%% *}
+    RM=$(nanddump -l "$CHIP" "/dev/$D" 2>/dev/null | md5sum); RM=${RM%% *}
+    case "$(il_backup_verdict "$BM" "$RM" "$REC")" in
+    fresh)
+        if [ "$REC" != "$BM" ]; then
+            record_backup "$BM" || finish FAIL backup "cannot write flash-backup.md5"
+        fi
+        if [ "$KEPT" -eq 1 ]; then
+            rec INFO backup "flash-backup.img already present; verified and kept the existing one"
+        else
+            rec PASS backup "$BM"
+        fi
+        ;;
+    earlier)
+        rec INFO backup "earlier: flash-backup.img $BM matches flash-backup.md5, not the chip; a previous run wrote part of the chip after proving it"
+        ;;
+    *)
+        finish FAIL backup "backup does not match a re-read of the chip"
+        ;;
+    esac
+}
 
-    gate install our-spl.bin
-    gate install our-uboot.bin
-    gate install nand.ubi
-
+# --- our firmware: gates shared by install and upt -----------------------------
+our_gates() { # our_gates <step>: P_UB, P_SPL, P_UBI are resolved and md5-gated
     # Content gate, not just a checksum: the md5 proves this is the file we
     # shipped, not that it is the right one. A U-Boot without `abselect` is
     # pre-A/B: it boots slot A from a fixed volume and can never flip slots.
-    il_file_contains "$DIR/our-uboot.bin" abselect \
-        || finish FAIL gate-content "our-uboot.bin has no abselect: pre-A/B U-Boot?"
-    rec PASS gate-content "our-uboot.bin carries abselect"
-
-    # The same for nand.ubi. A stale pre-A/B image matches its own md5 list
-    # and flashes; verify-ubi finds the missing B volumes only after
+    il_file_contains "$P_UB" abselect \
+        || finish FAIL gate-content "${P_UB##*/} has no abselect: pre-A/B U-Boot?"
+    rec PASS gate-content "${P_UB##*/} carries abselect"
+    # The same for the UBI image. A stale pre-A/B image matches its own md5
+    # list and flashes; verify-ubi finds the missing B volumes only after
     # ubiformat has run, and the ubi partition (0x140000-0x8000000) spans
     # the stock kernel partition at 0x300000, so by then the installer the
     # stock updater wrote is gone too. UBI volume names are plain strings in
     # the image, so check them before ubiformat.
-    il_file_contains "$DIR/nand.ubi" kernel_b \
-        || finish FAIL gate-content "nand.ubi has no kernel_b: pre-A/B image?"
-    il_file_contains "$DIR/nand.ubi" rootfs_b \
-        || finish FAIL gate-content "nand.ubi has no rootfs_b: pre-A/B image?"
-    rec PASS gate-content "nand.ubi carries kernel_b and rootfs_b"
+    il_file_contains "$P_UBI" kernel_b \
+        || finish FAIL gate-content "${P_UBI##*/} has no kernel_b: pre-A/B image?"
+    il_file_contains "$P_UBI" rootfs_b \
+        || finish FAIL gate-content "${P_UBI##*/} has no rootfs_b: pre-A/B image?"
+    rec PASS gate-content "${P_UBI##*/} carries kernel_b and rootfs_b"
+    # Every partition the plan writes, looked up before anything is erased.
+    U=$(il_mtd_by_name ubi)       || finish FAIL write-ubi "no ubi mtd"
+    E=$(il_mtd_by_name uboot-env) || finish FAIL erase-env "no uboot-env mtd"
+    il_mtd_by_name uboot >/dev/null || finish FAIL write-uboot "no uboot mtd"
+    il_mtd_by_name spl   >/dev/null || finish FAIL write-spl "no spl mtd"
+}
 
-    # Write order matters here. The Rockbox bootloader, from whose menu this
-    # mode is entered, lives in 0x0-0x20000, which is our SPL partition. As
-    # long as it survives, the user can re-enter the menu and retry. So UBI
-    # first, then U-Boot, then the SPL last: writing our SPL first would
-    # leave a window with our SPL, no U-Boot and no menu.
-    U=$(il_mtd_by_name ubi) || finish FAIL write-ubi "no ubi mtd"
-    step_arm
-    ubiformat "/dev/$U" -f "$DIR/nand.ubi" -y || finish FAIL write-ubi "ubiformat failed"
+# --- write steps (il_write_plan names them) ----------------------------------
+run_plan() { # run_plan <mode>
+    _plan=$(il_write_plan "$1") || finish FAIL "$1" "no write plan for mode $1"
+    for s in $_plan; do
+        "step_$(echo "$s" | tr - _)"
+    done
+}
+
+step_copy_itb() {
+    # Put this installer on the card as erosq.itb, where our U-Boot looks
+    # when neither slot boots; see il_write_plan. Gated against the .upt's
+    # own UPDATE.TXT, the list the stock updater checked it against.
+    ITB=$SD/erosq.itb
+    _exp=$(il_upt_md5 "$P_TXT" uimage.bin) || finish FAIL copy-itb "no single valid md5 for uimage.bin in UPDATE.TXT"
+    il_md5_ok "$P_UI" "$_exp" || finish FAIL copy-itb "uimage.bin md5 mismatch"
+    if [ -e "$ITB" ]; then
+        # The same file from an earlier run is fine. Any other one would be
+        # what our U-Boot boots after a power loss: refuse before any write.
+        il_md5_ok "$ITB" "$_exp" \
+            || finish FAIL copy-itb "a different erosq.itb is at the card root; move it off the card"
+        rec PASS copy-itb "erosq.itb already present $_exp"
+        return 0
+    fi
+    # Copy under another name and rename once proven, so a copy cut short
+    # is never taken for the installer.
+    rm -f "$ITB.tmp"
+    cp "$P_UI" "$ITB.tmp" || finish FAIL copy-itb "cannot copy the installer to the card"
+    sync
+    # Read it back from the card, not from the page cache.
+    { echo 3 > /proc/sys/vm/drop_caches; } 2>/dev/null
+    il_md5_ok "$ITB.tmp" "$_exp" || finish FAIL copy-itb "erosq.itb reads back wrong"
+    mv "$ITB.tmp" "$ITB" || finish FAIL copy-itb "cannot rename erosq.itb.tmp"
+    sync
+    rec PASS copy-itb "$_exp"
+}
+
+step_erase_env() {
+    # A stale U-Boot env survives a re-install and can pin the wrong A/B
+    # slot, so erase it; seed-env writes a complete one.
+    flash_erase "/dev/$E" 0 0 || finish FAIL erase-env "flash_erase failed"
+    rec PASS erase-env "uboot-env cleared"
+}
+
+step_write_uboot() {
+    w uboot write-uboot "$P_UB" || finish FAIL "$MODE" "uboot write failed"
+}
+
+step_write_spl() {
+    w spl write-spl "$P_SPL" || finish FAIL "$MODE" "spl write failed"
+}
+
+step_write_ubi() {
+    ubiformat "/dev/$U" -f "$P_UBI" -y || finish FAIL write-ubi "ubiformat failed"
     rec PASS write-ubi "ubiformat ok"
-    ubiattach -m "${U#mtd}" -d 0              || finish FAIL verify-ubi "ubiattach failed"
+}
+
+step_verify_ubi() {
+    ubiattach -m "${U#mtd}" -d 0 || finish FAIL verify-ubi "ubiattach failed"
     for v in 0 1 3 4; do
         [ -f "/sys/class/ubi/ubi0_$v/name" ] || finish FAIL verify-ubi "volume $v missing"
         rec INFO "vol$v" "$(cat /sys/class/ubi/ubi0_$v/name)"
     done
     rec PASS verify-ubi "all volumes present"
+}
 
-    # A stale U-Boot env survives a re-install and can pin the wrong A/B
-    # slot, so erase it; the seed below writes a complete one.
-    E=$(il_mtd_by_name uboot-env) || finish FAIL erase-env "no uboot-env mtd"
-    flash_erase "/dev/$E" 0 0     || finish FAIL erase-env "flash_erase failed"
-    rec PASS erase-env "uboot-env cleared"
-
-    w uboot write-uboot "$DIR/our-uboot.bin" || finish FAIL install "uboot write failed"
-    w spl   write-spl   "$DIR/our-spl.bin"   || finish FAIL install "spl write failed"
-
-    # Seed the environment. An erased env has no valid CRC and the rootfs
-    # ships no /etc/u-boot-initial-env, so libubootenv has no fallback and
-    # fw_setenv does nothing. U-Boot still boots on its built-in defaults,
-    # which hides it, but S99abcommit and swupdate's slot flip both need
-    # fw_setenv, so the unit could never commit an A/B update. A stored env
-    # replaces the built-in one wholesale, so the seed is complete. Both
-    # flags are needed: -f is the base environment (without it `-s` fails
-    # with "Cannot read default environment from file" and writes nothing),
-    # -s the values. The exit code is not trusted: read a key back.
+step_seed_env() {
+    # An erased env has no valid CRC and the rootfs ships no
+    # /etc/u-boot-initial-env, so libubootenv has no fallback and fw_setenv
+    # does nothing. U-Boot still boots on its built-in defaults, which hides
+    # it, but S99abcommit and swupdate's slot flip both need fw_setenv, so
+    # the unit could never commit an A/B update. A stored env replaces the
+    # built-in one wholesale, so the seed is complete. Both flags are
+    # needed: -f is the base environment (without it `-s` fails with
+    # "Cannot read default environment from file" and writes nothing), -s
+    # the values. The exit code is not trusted: read a key back.
     if [ -f /uboot-initial-env ]; then
         if fw_setenv -f /uboot-initial-env -s /uboot-initial-env >/dev/null 2>&1 &&
            fw_printenv boot_slot >/dev/null 2>&1; then
@@ -382,7 +442,84 @@ install)
     else
         rec FAIL seed-env "/uboot-initial-env missing from the initramfs"
     fi
+}
 
+step_drop_itb() {
+    # Reached on the way to PASS only: a failure keeps erosq.itb for the
+    # retry.
+    rm -f "$SD/erosq.itb" || finish FAIL drop-itb "cannot remove erosq.itb"
+    sync
+    rec PASS drop-itb "erosq.itb removed"
+}
+
+step_write_stockboot() {
+    w stockboot write-stockboot "$S_UB" || finish FAIL stock "bootloader write failed"
+}
+
+step_write_stockof() {
+    w stockof write-stockof "$S_UI" || finish FAIL "$MODE" "OF kernel write failed"
+}
+
+step_write_stockubi() {
+    # The stock firmware keeps two UBI devices, rootfs at 0x1000000 (64 MiB)
+    # and data at 0x5000000 (48 MiB); one UBI device across both would let
+    # rootfs blocks land where the stock kernel never looks. And a raw dump
+    # of a live rootfs is not crash-consistent, while SYSTEM.UBI is clean.
+    # So format the rootfs device, stream SYSTEM.UBI into a `rootfs` volume,
+    # and format the data device empty (the stock OS creates its data volume
+    # on first boot).
+    ubiformat "/dev/$R" -y        || finish FAIL stock "rootfs ubiformat failed"
+    ubiattach -m "${R#mtd}" -d 0  || finish FAIL stock "rootfs ubiattach failed"
+    # -m (all available blocks), not the factory's fixed volume size: this
+    # mtd-utils reserves more blocks for bad-block handling than the factory
+    # did, so the factory size does not fit and no volume would be created.
+    # SYSTEM.UBI's filesystem fits in what is available.
+    ubimkvol /dev/ubi0 -n 0 -N rootfs -t dynamic -m || finish FAIL stock "ubimkvol failed"
+    ubiupdatevol /dev/ubi0_0 "$S_SYS" || finish FAIL stock "ubiupdatevol failed"
+    ubidetach -d 0 2>/dev/null
+    ubiformat "/dev/$DATA_MTD" -y  || finish FAIL stock "data ubiformat failed"
+    rec PASS write-stockubi "rootfs from SYSTEM.UBI + empty data"
+}
+
+step_restore_flash() {
+    w wholechip restore-flash "$DIR/flash.img" || finish FAIL restore "flash.img write failed"
+}
+
+case "$MODE" in
+backup)
+    # nanddump skips bad blocks, so with BB>0 the dump is compacted, not a
+    # 1:1 image; BB is already in result.txt. Only a full-size dump that
+    # equals a re-read of the chip goes into flash-backup.md5.
+    D=$(il_mtd_by_name wholechip) || finish FAIL backup "no wholechip mtd"
+    # Never overwrite a backup: it may be the only copy of the original
+    # firmware. The same for a record whose image was moved away.
+    [ ! -e "$BK" ] || finish FAIL backup "flash-backup.img is already on the card; move it off first"
+    [ ! -e "$BKMD5" ] || finish FAIL backup "flash-backup.md5 is already on the card; move it off with its image first"
+    nanddump -f "$BK" "/dev/$D" >/dev/null 2>&1 \
+        || finish FAIL backup "nanddump failed"
+    sync
+    M=$(md5sum "$BK"); M=${M%% *}
+    BSZ=$(stat -c%s "$BK") || BSZ=0
+    if [ "$BB" -eq 0 ] && [ "$BSZ" -eq "$CHIP" ]; then
+        RM=$(nanddump -l "$CHIP" "/dev/$D" 2>/dev/null | md5sum); RM=${RM%% *}
+        [ "$M" = "$RM" ] || finish FAIL backup "backup does not match a re-read of the chip"
+        record_backup "$M" || finish FAIL backup "cannot write flash-backup.md5"
+    else
+        rec WARN backup "not a 1:1 image ($BSZ bytes, $BB bad blocks); not recorded in flash-backup.md5"
+    fi
+    finish PASS backup "$M"
+    ;;
+install)
+    [ "$BB" -eq 0 ] || finish FAIL bad-blocks "chip has $BB bad blocks; linear images unsafe"
+    backup_gate
+
+    gate install our-spl.bin
+    gate install our-uboot.bin
+    gate install nand.ubi
+    P_UB=$DIR/our-uboot.bin; P_SPL=$DIR/our-spl.bin; P_UBI=$DIR/nand.ubi
+    our_gates install
+
+    run_plan install
     finish PASS install "SPL, U-Boot and all UBI volumes written"
     ;;
 upt)
@@ -399,14 +536,17 @@ upt)
         halt_forever
     fi
 
-    # Space gate first. The backup is 128 MiB; a short write would only be
-    # found once the original image is unrecoverable. busybox df prints a
-    # header line and one data line, and there is no awk here, so read the
-    # columns by position.
+    # Space gate first: room for the 128 MiB backup and erosq.itb. A short
+    # write would only be found once the original image is unrecoverable.
+    # A retry keeps the backup it already took, so it needs only the rest.
+    # busybox df prints a header line and one data line, and there is no
+    # awk here, so read the columns by position.
+    NEED=163840
+    [ -f "$BK" ] && NEED=32768
     set -- $(df -k "$SD" | tail -n1)
     FREE=$4
     case "$FREE" in ''|*[!0-9]*) finish FAIL space "cannot read free space from df" ;; esac
-    [ "$FREE" -ge 163840 ] || finish FAIL space "need 160 MiB free on the card, have $FREE KiB"
+    [ "$FREE" -ge "$NEED" ] || finish FAIL space "need $((NEED / 1024)) MiB free on the card, have $FREE KiB"
     rec PASS space "$FREE KiB free"
 
     # The payload rides inside the same .upt, as files UPDATE.TXT never
@@ -418,6 +558,8 @@ upt)
     rec PASS upt-mount "$UPT"
 
     P_MD5=$(il_find_ci /iso payload.md5)  || finish FAIL upt-payload "payload.md5 missing from the .upt"
+    P_TXT=$(il_find_ci /iso update.txt)   || finish FAIL upt-payload "update.txt missing from the .upt"
+    P_UI=$(il_find_ci  /iso uimage.bin)   || finish FAIL upt-payload "uimage.bin missing from the .upt"
     P_UBI=$(il_find_ci /iso nand.ubi)     || finish FAIL upt-payload "nand.ubi missing from the .upt"
     P_SPL=$(il_find_ci /iso ourspl.bin)   || finish FAIL upt-payload "ourspl.bin missing from the .upt"
     P_UB=$(il_find_ci  /iso ouruboot.bin) || finish FAIL upt-payload "ouruboot.bin missing from the .upt"
@@ -425,75 +567,13 @@ upt)
     gate_at upt nand.ubi     "$P_UBI" "$P_MD5"
     gate_at upt ourspl.bin   "$P_SPL" "$P_MD5"
     gate_at upt ouruboot.bin "$P_UB"  "$P_MD5"
+    our_gates upt
 
-    # Content gates, as in mode=install: an md5 proves which file this is,
-    # never that it is the right one.
-    il_file_contains "$P_UB" abselect \
-        || finish FAIL gate-content "ouruboot.bin has no abselect: pre-A/B U-Boot?"
-    rec PASS gate-content "ouruboot.bin carries abselect"
-    il_file_contains "$P_UBI" kernel_b \
-        || finish FAIL gate-content "nand.ubi has no kernel_b: pre-A/B image?"
-    il_file_contains "$P_UBI" rootfs_b \
-        || finish FAIL gate-content "nand.ubi has no rootfs_b: pre-A/B image?"
-    rec PASS gate-content "nand.ubi carries kernel_b and rootfs_b"
+    # The whole-chip backup is the user's only copy of the unit's original
+    # firmware, proven before the first destructive write.
+    backup_gate
 
-    # Whole-chip backup, verified before the first destructive write. It is
-    # the user's only copy of the unit's original firmware.
-    D=$(il_mtd_by_name wholechip) || finish FAIL backup "no wholechip mtd"
-    if [ -f "$DIR/flash-backup.img" ]; then
-        KEPT=1
-    else
-        KEPT=0
-        nanddump -f "$DIR/flash-backup.img" "/dev/$D" >/dev/null 2>&1 \
-            || finish FAIL backup "nanddump failed (backup runs BEFORE any write)"
-        sync
-    fi
-    # Verify it, fresh or kept, the same way, against a fresh re-read of the
-    # chip: a size check alone lets a short FAT write or a stale leftover
-    # through.
-    BSZ=$(stat -c%s "$DIR/flash-backup.img") || finish FAIL backup "cannot stat flash-backup.img"
-    [ "$BSZ" -eq 134217728 ] \
-        || finish FAIL backup "flash-backup.img is $BSZ bytes, expected 134217728 (card full? corrupt leftover?)"
-    BM=$(md5sum "$DIR/flash-backup.img"); BM=${BM%% *}
-    RM=$(nanddump -l 134217728 "/dev/$D" 2>/dev/null | md5sum); RM=${RM%% *}
-    [ "$BM" = "$RM" ] || finish FAIL backup "backup does not match a re-read of the chip"
-    if [ "$KEPT" -eq 1 ]; then
-        rec INFO backup "flash-backup.img already present; verified and kept the existing one"
-    else
-        rec PASS backup "$BM"
-    fi
-
-    # Same order as mode=install: UBI, then U-Boot, then the SPL last.
-    U=$(il_mtd_by_name ubi) || finish FAIL write-ubi "no ubi mtd"
-    step_arm
-    ubiformat "/dev/$U" -f "$P_UBI" -y || finish FAIL write-ubi "ubiformat failed"
-    rec PASS write-ubi "ubiformat ok"
-    ubiattach -m "${U#mtd}" -d 0       || finish FAIL verify-ubi "ubiattach failed"
-    for v in 0 1 3 4; do
-        [ -f "/sys/class/ubi/ubi0_$v/name" ] || finish FAIL verify-ubi "volume $v missing"
-        rec INFO "vol$v" "$(cat /sys/class/ubi/ubi0_$v/name)"
-    done
-    rec PASS verify-ubi "all volumes present"
-
-    E=$(il_mtd_by_name uboot-env) || finish FAIL erase-env "no uboot-env mtd"
-    flash_erase "/dev/$E" 0 0     || finish FAIL erase-env "flash_erase failed"
-    rec PASS erase-env "uboot-env cleared"
-
-    w uboot write-uboot "$P_UB"  || finish FAIL upt "uboot write failed"
-    w spl   write-spl   "$P_SPL" || finish FAIL upt "spl write failed"
-
-    # Seed the environment; see mode=install.
-    if [ -f /uboot-initial-env ]; then
-        if fw_setenv -f /uboot-initial-env -s /uboot-initial-env >/dev/null 2>&1 &&
-           fw_printenv boot_slot >/dev/null 2>&1; then
-            rec PASS seed-env "u-boot environment seeded and read back"
-        else
-            rec FAIL seed-env "fw_setenv failed; A/B updates will not commit"
-        fi
-    else
-        rec FAIL seed-env "/uboot-initial-env missing from the initramfs"
-    fi
-
+    run_plan upt
     finish PASS upt "SPL, U-Boot and all UBI volumes written from update.upt"
     ;;
 stock)
@@ -503,29 +583,10 @@ stock)
     stock_member uboot.bin;  S_UB=$SM
     stock_member uimage.bin; S_UI=$SM
     stock_member system.ubi; S_SYS=$SM
-    step_arm
-    w stockboot write-stockboot "$S_UB" || finish FAIL stock "bootloader write failed"
-    w stockof   write-stockof   "$S_UI" || finish FAIL stock "OF kernel write failed"
-    # The stock firmware keeps two UBI devices, rootfs at 0x1000000 (64 MiB)
-    # and data at 0x5000000 (48 MiB); one UBI device across both would let
-    # rootfs blocks land where the stock kernel never looks. And a raw dump
-    # of a live rootfs is not crash-consistent, while SYSTEM.UBI is clean.
-    # So format the rootfs device, stream SYSTEM.UBI into a `rootfs` volume,
-    # and format the data device empty (the stock OS creates its data volume
-    # on first boot).
-    R=$(il_mtd_by_name stockrootfs) || finish FAIL stock "no stockrootfs mtd"
-    D=$(il_mtd_by_name stockdata)   || finish FAIL stock "no stockdata mtd"
-    ubiformat "/dev/$R" -y             || finish FAIL stock "rootfs ubiformat failed"
-    ubiattach -m "${R#mtd}" -d 0       || finish FAIL stock "rootfs ubiattach failed"
-    # -m (all available blocks), not the factory's fixed volume size: this
-    # mtd-utils reserves more blocks for bad-block handling than the factory
-    # did, so the factory size does not fit and no volume would be created.
-    # SYSTEM.UBI's filesystem fits in what is available.
-    ubimkvol /dev/ubi0 -n 0 -N rootfs -t dynamic -m || finish FAIL stock "ubimkvol failed"
-    ubiupdatevol /dev/ubi0_0 "$S_SYS"  || finish FAIL stock "ubiupdatevol failed"
-    ubidetach -d 0 2>/dev/null
-    ubiformat "/dev/$D" -y             || finish FAIL stock "data ubiformat failed"
-    rec PASS write-stockubi "rootfs from SYSTEM.UBI + empty data"
+    R=$(il_mtd_by_name stockrootfs)     || finish FAIL stock "no stockrootfs mtd"
+    DATA_MTD=$(il_mtd_by_name stockdata) || finish FAIL stock "no stockdata mtd"
+
+    run_plan stock
     # Not a complete factory restore. The stock chip has a `recovery`
     # partition at 0x900000 (7 MiB) whose kernel is the stock updater, the
     # one the stock Firmware Update entry boots. The official update has no
@@ -545,8 +606,7 @@ restore)
     else
         rec INFO gate-md5 "no md5sums entry for flash.img; writing it unverified"
     fi
-    step_arm
-    w wholechip restore-flash "$DIR/flash.img" || finish FAIL restore "flash.img write failed"
+    run_plan restore
     finish PASS restore "whole-chip image restored"
     ;;
 *)

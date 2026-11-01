@@ -146,5 +146,51 @@ ck "PASS reboots on a self-booting unit" reboot "$(il_fail_action PASS 1)"
 ck "FAIL reboots elsewhere"            reboot   "$(il_fail_action FAIL 0)"
 ck "FAIL powers off when a reboot boots the installer" poweroff "$(il_fail_action FAIL 1)"
 
+# --- il_write_plan ---
+INIT="$HERE/../board/erosq/installer/init"
+ck "plan install (hardware-proven order)" "arm write-ubi verify-ubi erase-env write-uboot write-spl seed-env" "$(il_write_plan install)"
+ck "plan upt" "copy-itb arm erase-env write-uboot write-spl write-ubi verify-ubi seed-env drop-itb" "$(il_write_plan upt)"
+il_write_plan backup >/dev/null; ck "no plan for backup (no chip writes)" 1 $?
+il_write_plan wipe >/dev/null;   ck "no plan for an unknown mode" 1 $?
+il_write_plan "" >/dev/null;     ck "no plan for no mode" 1 $?
+pos() { # pos <word> <list...> -> 1-based index of the first match, 0 if none
+    _w=$1; shift; _i=0
+    for _x in "$@"; do _i=$((_i+1)); [ "$_x" = "$_w" ] && { echo "$_i"; return; }; done
+    echo 0
+}
+writes() { case "$1" in erase-*|write-*|restore-*|seed-*) return 0 ;; esac; return 1; }
+for m in install upt stock restore; do
+    p=$(il_write_plan "$m"); ck "plan $m exists" 0 $?
+    n=0; before=ok; after=; seen=
+    for s in $p; do
+        [ "$s" = arm ] && n=$((n+1))
+        if [ -z "$seen" ]; then
+            if [ "$s" = arm ]; then seen=1; elif writes "$s"; then before="$s writes before arm"; fi
+        elif [ -z "$after" ]; then after=$s
+        fi
+        grep -q "^step_$(echo "$s" | tr - _)() " "$INIT"; ck "init has step_$s() for plan $m" 0 $?
+    done
+    ck "plan $m arms once" 1 "$n"
+    ck "plan $m writes nothing before arm" ok "$before"
+    writes "$after"; ck "plan $m: the step after arm ($after) erases" 0 $?
+done
+set -- $(il_write_plan upt)
+u=$(pos write-uboot "$@"); sp=$(pos write-spl "$@"); ub=$(pos write-ubi "$@")
+[ "$u" -gt 0 ] && [ "$u" -lt "$sp" ] && [ "$sp" -lt "$ub" ]; ck "upt: uboot < spl < ubi" 0 $?
+[ "$(pos copy-itb "$@")" -lt "$(pos arm "$@")" ]; ck "upt: erosq.itb is on the card before arm" 0 $?
+[ "$(pos drop-itb "$@")" -eq $# ]; ck "upt: drop-itb is last" 0 $?
+[ "$(pos verify-ubi "$@")" -gt "$ub" ]; ck "upt: verify-ubi after write-ubi" 0 $?
+set --
+
+# --- il_backup_verdict ---
+ck "verdict fresh"                 fresh   "$(il_backup_verdict "$A" "$A" "")"
+ck "verdict fresh, record agrees"  fresh   "$(il_backup_verdict "$A" "$A" "$A")"
+ck "verdict fresh, record differs" fresh   "$(il_backup_verdict "$A" "$A" "$B")"
+ck "verdict earlier"               earlier "$(il_backup_verdict "$A" "$B" "$A")"
+ck "verdict bad, no record"        bad     "$(il_backup_verdict "$A" "$B" "")"
+ck "verdict bad, other record"     bad     "$(il_backup_verdict "$A" "$B" "$C")"
+ck "verdict bad, empty backup md5" bad     "$(il_backup_verdict "" "" "")"
+ck "verdict bad, empty backup md5 and chip" bad "$(il_backup_verdict "" "$B" "")"
+
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
