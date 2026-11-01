@@ -4,7 +4,7 @@
 # (one byte over included) or with the wrong header, build-upt.py writes the
 # stock .upt shape and refuses wrong payloads, and check-payload.sh finds keys,
 # Wi-Fi credentials and private names inside a squashfs.
-# Needs mkimage, mksquashfs/unsquashfs, openssl and PYTHON (default python3)
+# Needs mkimage/dumpimage, dtc, mksquashfs/unsquashfs, cpio, xz, zstd, openssl and PYTHON (default python3)
 # with pycdlib.
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -102,4 +102,50 @@ ANON_PATTERNS='zq-private' sh "$I/check-payload.sh" "$T/r.sqfs" >/dev/null 2>&1 
 mkroot; echo 'firmware zq-private-2' > "$T/root/etc/sw-versions"; sqfs
 ANON_PATTERNS='other
 zq-PRIVATE' sh "$I/check-payload.sh" "$T/r.sqfs" >/dev/null 2>&1 && fail "check-payload: ANON_PATTERNS content missed"
+# planted secrets inside compressed layers must be found
+mkcpio() { # mkcpio <out.cpio.gz>: an initramfs with a non-empty authorized_keys
+	rm -rf "$T/ir" && mkdir -p "$T/ir/root/.ssh" && echo 'ssh-ed25519 AAAA planted' > "$T/ir/root/.ssh/authorized_keys"
+	(cd "$T/ir" && find . | cpio -o -H newc --quiet) | gzip -9n > "$1"
+}
+deep() { # deep <file> <what>: check-payload must refuse <file>
+	sh "$I/check-payload.sh" "$1" >/dev/null 2>&1 && fail "check-payload missed $2"
+	return 0
+}
+mkcpio "$T/ir.cpio.gz"
+# a kernel blob with the initramfs linked into it, gzip'd, in a uImage
+{ head -c 300000 /dev/urandom; cat "$T/ir.cpio.gz"; head -c 1000 /dev/urandom; } > "$T/vmlinux.bin"
+gzip -9n -c "$T/vmlinux.bin" > "$T/vmlinux.bin.gz"
+mkimage -A mips -O linux -T kernel -C gzip -a 0x80100000 -e 0x80100000 -n k \
+	-d "$T/vmlinux.bin.gz" "$T/planted.uImage" >/dev/null || fail "mkimage (planted)"
+deep "$T/planted.uImage" "an authorized_keys in an initramfs linked into a gzip'd uImage kernel"
+# a FIT whose ramdisk is an xz'd cpio carrying a Wi-Fi passphrase
+rm -rf "$T/ir" && mkdir -p "$T/ir/etc" && printf 'network={\n psk="planted"\n}\n' > "$T/ir/etc/wpa.conf"
+(cd "$T/ir" && find . | cpio -o -H newc --quiet) | xz -9 > "$T/rd.xz"
+head -c 1000 /dev/urandom > "$T/k.bin"
+cat > "$T/f.its" <<ITS
+/dts-v1/;
+/ { description = "t"; #address-cells = <1>;
+  images {
+    kernel { data = /incbin/("$T/k.bin"); type = "kernel"; arch = "mips"; os = "linux";
+             compression = "none"; load = <0x80100000>; entry = <0x80100000>; };
+    ramdisk { data = /incbin/("$T/rd.xz"); type = "ramdisk"; arch = "mips"; os = "linux";
+              compression = "none"; };
+  };
+  configurations { default = "c"; c { kernel = "kernel"; ramdisk = "ramdisk"; }; };
+};
+ITS
+mkimage -f "$T/f.its" "$T/planted.itb" >/dev/null || fail "mkimage -f"
+deep "$T/planted.itb" "a Wi-Fi passphrase in an xz'd ramdisk inside an ITB"
+# a .upt whose installer carries the planted initramfs
+upt "$T/planted.uImage" "$T/nand.ubi" "$T/uboot" "$T/planted.upt" >/dev/null || fail "build-upt (planted)"
+deep "$T/planted.upt" "an authorized_keys inside the installer inside a .upt"
+# zstd, and a private name only ANON_PATTERNS knows
+printf 'build zq-private-host\n' | zstd -q > "$T/n.zst"
+ANON_PATTERNS='zq-private' sh "$I/check-payload.sh" "$T/n.zst" >/dev/null 2>&1 &&
+	fail "check-payload missed a private name in a zstd stream"
+# and a clean compressed installer passes
+{ head -c 300000 /dev/zero; head -c 1000 /dev/zero | gzip -9n; } | gzip -9n > "$T/clean.gz"
+mkimage -A mips -O linux -T kernel -C gzip -a 0x80100000 -e 0x80100000 -n k \
+	-d "$T/clean.gz" "$T/clean.uImage" >/dev/null || fail "mkimage (clean)"
+sh "$I/check-payload.sh" "$T/clean.uImage" >/dev/null 2>&1 || fail "check-payload refused a clean uImage"
 echo "PASS: installer tools"

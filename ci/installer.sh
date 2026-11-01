@@ -6,7 +6,7 @@
 #     -> <dir>/out/{update.upt,nand.ubi,MD5SUMS}
 # The installer kernel and its initramfs are not built here yet (PLAN step 6);
 # the uImage is an input. Every gate runs before anything is written to out/.
-# Needs: ubinize (mtd-utils), mkimage, unsquashfs, python3 with pycdlib,
+# Needs: ubinize (mtd-utils), mkimage + dumpimage, xz, zstd, cpio, unsquashfs, python3 with pycdlib,
 # and MKSPL (default mkspl-x1000 on PATH: Rockbox tools/, GPL-2.0+).
 # Env: SOURCE_DATE_EPOCH (else the commit time), MKSPL, ANON_PATTERNS.
 set -euo pipefail
@@ -26,8 +26,8 @@ rm -rf "$O" "$T" && mkdir -p "$O" "$T"
 
 # the brick ceiling first: nothing else matters if this fails
 "$I/check-uimage.sh" "$UIMAGE"
-# nothing private inside, whatever built the inputs
-"$I/check-payload.sh" "$UIMAGE" "$ITB" "$ROOTFS" "$UBOOT"
+# nothing private inside, whatever built the inputs (unpacked all the way down)
+"$I/check-payload.sh" "$UIMAGE" "$ITB" "$ROOTFS" "$SPL_RAW" "$UBOOT"
 
 # SPL with the X1000 boot ROM header for NAND, padded to 8 KiB
 "${MKSPL:-mkspl-x1000}" -type=nand -ppb=2 -bpp=2 "$SPL_RAW" "$T/spl.erosq"
@@ -74,6 +74,9 @@ ubinize -o "$T/nand.ubi" -p 128KiB -m 2048 -s 2048 -Q 0x20adf942 "$T/ubinize.cfg
 
 python3 "$I/build-upt.py" --uimage "$UIMAGE" --nand-ubi "$T/nand.ubi" \
 	--spl "$T/spl.erosq" --uboot "$T/u-boot-flash.bin" -o "$T/update.upt"
+# and the outputs themselves, before they reach out/ (the .upt is unpacked to
+# its members; nand.ubi is scanned raw: its volumes are the ITB and rootfs above)
+"$I/check-payload.sh" "$T/spl.erosq" "$T/u-boot-flash.bin" "$T/nand.ubi" "$T/update.upt"
 mv "$T/update.upt" "$T/nand.ubi" "$O/"
 (cd "$O" && md5sum update.upt nand.ubi > MD5SUMS && cat MD5SUMS)
 rm -rf "$T"
