@@ -1,0 +1,40 @@
+# Installer kernel: merged onto the erosq kernel .config (LINUX_SHA).
+# It must stay under the stock bootloader's 4 MiB read (check-uimage.sh), so
+# everything an installer does not need is off. It keeps NAND (SFC + SPI-NAND
+# + UBI), the SD card (MMC + VFAT), loop + ISO9660 (to mount update.upt), the
+# PMIC (AXP2101: poweroff) and the panel with a framebuffer console, so the
+# owner can watch the log on the screen: there is no serial port for them.
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_MIPS_RAW_APPENDED_DTB=y
+# CONFIG_MIPS_NO_APPENDED_DTB is not set
+# CONFIG_BUILTIN_DTB_ALL is not set
+CONFIG_BLK_DEV_LOOP=y
+CONFIG_ISO9660_FS=y
+# no earlycon: it touches UART2 before its clock is on, and the stock
+# bootloader leaves that clock gated (a silent hang)
+CONFIG_CMDLINE="console=ttyS2,115200n8"
+# CONFIG_SOUND is not set
+# CONFIG_NET is not set
+# CONFIG_USB_SUPPORT is not set
+# CONFIG_INPUT is not set
+# CONFIG_HID_SUPPORT is not set
+# CONFIG_ZRAM is not set
+# CONFIG_ZSMALLOC is not set
+# CONFIG_SWAP is not set
+# CONFIG_DMA_CMA is not set
+# CONFIG_CMA is not set
+# CONFIG_CPU_FREQ is not set
+# CONFIG_KALLSYMS is not set
+# CONFIG_FTRACE is not set
+# CONFIG_PROFILING is not set
+# CONFIG_BLK_DEV_BSG is not set
+# CONFIG_IKCONFIG is not set
+CONFIG_VT=y
+CONFIG_VT_CONSOLE=y
+CONFIG_FB=y
+CONFIG_FB_CORE=y
+CONFIG_DRM_FBDEV_EMULATION=y
+CONFIG_DRM_CLIENT_SELECTION=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_FONT_SUPPORT=y
+CONFIG_FONT_8x8=y
