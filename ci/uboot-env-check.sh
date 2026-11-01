@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Gate the default environment compiled into u-boot.bin. The installer seeds
-# the chip's env from the same defaults (u-boot-initial-env), so what is
-# checked here is also what a fresh install boots with.
-#   ci/uboot-env-check.sh <u-boot.bin>
+# Gate the default environment compiled into u-boot.bin, or the same
+# defaults as text (u-boot-initial-env, `make u-boot-initial-env`), which the
+# installer seeds the chip's env from: what is checked here is also what a
+# fresh install boots with.
+#   ci/uboot-env-check.sh <u-boot.bin | u-boot-initial-env>
 #  - the A/B boot env (swupdate rollback depends on it);
 #  - the card fallback when the A/B slot fails: erosq.itb (an install cut
 #    short), then erosq-install/installer.uImage, where the installer keeps

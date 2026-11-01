@@ -28,5 +28,12 @@ ck "fallback erosq.itb only (UBOOT_SHA 76df256d)" refused "$(ok "$T/old.bin")"
 ck "fallback installer.uImage only (an install cut short is not retried)" refused "$(ok "$T/only.bin")"
 sed 's/bootlimit=3/bootlimix=3/' "$T/new.bin" > "$T/nolimit.bin"
 ck "no bootlimit" refused "$(ok "$T/nolimit.bin")"
+# the same defaults as text (make u-boot-initial-env), which the installer seeds
+printf 'altbootcmd=setenv boot_try; run bootcmd\nabselect=x\nboot_slot=a\nbootcmd=%s\nbootlimit=3\n' \
+	"$AB; fatload mmc 0 \${loadaddr} erosq.itb; bootm \${loadaddr}; fatload mmc 0 \${loadaddr} erosq-install/installer.uImage; bootm \${loadaddr}" > "$T/new.env"
+ck "u-boot-initial-env with the fallback chain" accepted "$(ok "$T/new.env")"
+printf 'altbootcmd=setenv boot_try; run bootcmd\nabselect=x\nboot_slot=a\nbootcmd=%s\nbootlimit=3\n' \
+	"$AB; fatload mmc 0 \${loadaddr} erosq.itb; bootm \${loadaddr}" > "$T/old.env"
+ck "u-boot-initial-env, erosq.itb only" refused "$(ok "$T/old.env")"
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

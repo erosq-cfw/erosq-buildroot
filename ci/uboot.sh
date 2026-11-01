@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Build EROS Q U-Boot + SPL from UBOOT_SHA with the SDK. Same steps locally and in CI.
 #   ci/uboot.sh <dir>   fetch erosq-cfw/u-boot@UBOOT_SHA into <dir>/u-boot, build,
-#                       leave <dir>/out/{u-boot.bin,u-boot-flash.bin,u-boot-spl.bin,uboot.version}
+#                       leave <dir>/out/{u-boot.bin,u-boot-flash.bin,u-boot-spl.bin,uboot.version,
+#                       u-boot-initial-env}
+# u-boot-initial-env is the default environment of this build, as text; the
+# installer seeds the chip's env from it after it erases uboot-env.
 # u-boot-flash.bin is u-boot.bin padded to the 1 MiB the SPL reads (UBOOT_NAND_LEN);
 # u-boot-spl.bin is unsigned (NAND block 0 needs the boot ROM header added).
 # Env: UBOOT_GIT (default the GitHub repo; a local clone works too), JOBS.
@@ -28,15 +31,17 @@ command -v ccache >/dev/null && CC="ccache $CC"
 mkdir -p "$O" && rm -f "$O"/*
 make -C "$U" O="$B" erosq_defconfig
 make -C "$U" O="$B" -j"${JOBS:-$(nproc)}" CC="$CC" 2>&1 | tee "$O/build.log"
+make -C "$U" O="$B" CC="$CC" u-boot-initial-env 2>&1 | tee -a "$O/build.log"
 
 fail() { echo "FATAL: $*" >&2; exit 1; }
 ! grep -qi warning "$O/build.log" || fail "compiler warnings (see build.log)"
 cd "$O"
-cp "$B/u-boot.bin" "$B/spl/u-boot-spl.bin" .
+cp "$B/u-boot.bin" "$B/spl/u-boot-spl.bin" "$B/u-boot-initial-env" .
 # the SPL loads exactly UBOOT_NAND_LEN; a bigger u-boot.bin would be cut off (brick)
 [ "$(stat -c %s u-boot.bin)" -le $((0x100000)) ] || fail "u-boot.bin is over 1 MiB"
 cp u-boot.bin u-boot-flash.bin && truncate -s $((0x100000)) u-boot-flash.bin
 # the A/B boot env and the card fallback must be compiled in
 "$EXT/ci/uboot-env-check.sh" u-boot.bin
+"$EXT/ci/uboot-env-check.sh" u-boot-initial-env
 strings u-boot.bin | grep -m1 '^U-Boot 20' | tee uboot.version
 ls -l "$O"
