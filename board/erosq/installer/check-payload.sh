@@ -116,13 +116,15 @@ EOF
 		each "$o/iso" "$n" ;;
 	*)
 		[ "$(wc -l < "$f.offs")" -le "$MAXSTREAMS" ] || { hit "$f: $c, over the $MAXSTREAMS it unpacks"; return; }
-		k=0 end=0 rng=
+		k=0 end=0 rng= beg=-1
 		while read -r fmt off; do
 			# inside a stream already unpacked: a part of it, not a stream.
 			# Inside a cpio archive, only inside the data of a regular member
 			# written out (and so unpacked and scanned); a magic in a header,
-			# a name or a link target is unpacked on its own.
-			if [ "$off" -lt "$end" ]; then
+			# a name or a link target is unpacked on its own. A second reading
+			# of the same offset (gzip as gzip -d and as the kernel parse its
+			# header) is unpacked too.
+			if [ "$off" -lt "$end" ] && [ "$off" -ne "$beg" ]; then
 				[ -z "$rng" ] && continue
 				in_range "$off" "$rng" && continue
 			fi
@@ -132,7 +134,7 @@ EOF
 				[ "$off" -lt "$end" ] || end=0
 			else
 				if [ "$off" -ge "$end" ]; then
-					end=$(head -1 "$o/s$k.out") rng=
+					end=$(head -1 "$o/s$k.out") rng= beg=$off
 					[ "$fmt" != cpio ] || { tail -n +2 "$o/s$k.out" > "$o/s$k.rng"; rng=$o/s$k.rng; }
 				fi
 				if [ -d "$o/s$k" ]; then each "$o/s$k" "$n"; else unpack "$o/s$k" "$n"; fi

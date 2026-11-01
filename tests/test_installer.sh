@@ -237,6 +237,56 @@ mkimage -A mips -O linux -T kernel -C gzip -a 0x80100000 -e 0x80100000 -n k \
 sh "$I/check-payload.sh" "$T/c0.uImage" >/dev/null 2>&1 || fail "check-payload refused a clean uImage (trailer fixture)"
 cat "$T/c0.uImage" "$T/s.gz" > "$T/trail.uImage"
 deep "$T/trail.uImage" "a passphrase in a gzip stream after the uImage payload"
+# gzip headers that fail the XFL/OS check are decoded with no fixed window,
+# as gzip -d and the kernel read them (each one was missed by c494f46)
+"$PY" - "$T" <<'EOF' || fail "gzip fixtures"
+import random, struct, sys, zlib
+t = sys.argv[1]
+psk = b'network={\n psk="planted"\n}\n'
+def raw(*parts):
+    c = zlib.compressobj(9, zlib.DEFLATED, -15)
+    return b"".join(c.compress(x) if isinstance(x, bytes) else c.flush(x) for x in parts) + c.flush()
+def gz(flg, extra, body, data):  # OS 0x80: not one the header check knows
+    return (b"\x1f\x8b\x08" + bytes([flg]) + b"\0\0\0\0\0\x80" + extra + body
+            + struct.pack("<II", zlib.crc32(data), len(data)))
+def put(n, b): open("%s/%s" % (t, n), "wb").write(b)
+# a file name longer than the old 1 MiB trial window
+put("fname.gz", gz(8, b"a" * (1100 << 10) + b"\0", raw(psk), psk))
+# 1.1 MiB of empty stored blocks (no output) before the data
+put("empty.gz", gz(0, b"", b"\0\0\0\xff\xff" * 230000 + raw(psk), psk))
+# FEXTRA set but no extra field: the kernel reads deflate data at byte 10
+put("kern.gz", gz(4, b"", raw(psk), psk))
+# the data, then a block of the reserved type: a streaming decoder writes
+# the data out before it fails
+put("cut.gz", gz(0, b"", raw(psk, zlib.Z_SYNC_FLUSH)[:-1] + b"\x07\0\0", psk))
+# one header, two readings: gzip -d skips an FEXTRA field that the kernel
+# reads as deflate data (its XLEN is the first two bytes of that data)
+ks = raw(psk)
+xlen = struct.unpack("<H", ks[:2])[0]
+assert len(ks) - 2 <= xlen
+clean = b"clean\n"
+put("two.gz", b"\x1f\x8b\x08\x04\0\0\0\0\0\x03" + ks.ljust(xlen + 2, b"\0") + raw(clean)
+    + struct.pack("<II", zlib.crc32(clean), len(clean)))
+# random bytes behind many gzip magics decode a few bytes now and then:
+# a clean blob still passes
+r = random.Random(1)
+b = bytearray(r.getrandbits(8) for _ in range(1 << 21))
+for i in range(600):
+    o = r.randrange(len(b) - 16)
+    b[o:o + 10] = b"\x1f\x8b\x08" + bytes([r.choice((0, 2, 4, 8, 16, 0x16, 0x20))]) + bytes(r.getrandbits(8) for _ in range(5)) + b"\x80"
+put("magics.bin", bytes(b))
+EOF
+gzip -dc "$T/fname.gz" 2>/dev/null | grep -q 'psk=' || fail "gzip -dc does not decode fname.gz (fixture)"
+gzip -dc "$T/empty.gz" 2>/dev/null | grep -q 'psk=' || fail "gzip -dc does not decode empty.gz (fixture)"
+gzip -dc "$T/cut.gz" 2>/dev/null | grep -q 'psk=' || fail "gzip -dc writes nothing of cut.gz (fixture)"
+gzip -dc "$T/two.gz" 2>/dev/null | grep -qx clean || fail "gzip -dc does not decode two.gz (fixture)"
+for g in fname empty kern cut two; do blob < "$T/$g.gz" > "$T/k-$g.bin"; done
+deep "$T/k-fname.bin" "a gzip stream with a 1.1 MiB file name inside a blob"
+deep "$T/k-empty.bin" "a gzip stream that starts with 1.1 MiB of empty blocks inside a blob"
+deep "$T/k-kern.bin" "a gzip stream the kernel reads past an FEXTRA flag inside a blob"
+deep "$T/k-cut.bin" "the data a gzip stream decodes before its error inside a blob"
+deep "$T/k-two.bin" "the kernel's reading of a gzip header that gzip -d reads otherwise"
+sh "$I/check-payload.sh" "$T/magics.bin" >/dev/null 2>&1 || fail "check-payload refused random bytes behind gzip magics"
 # and a clean compressed installer passes
 { head -c 300000 /dev/zero; head -c 1000 /dev/zero | gzip -9n; } | gzip -9n > "$T/clean.gz"
 mkimage -A mips -O linux -T kernel -C gzip -a 0x80100000 -e 0x80100000 -n k \

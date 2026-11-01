@@ -20,8 +20,15 @@ A file that STARTS with a format's magic is that format and must unpack.
 Inside a file, a magic is a stream when its header is one a decoder accepts:
 a magic number on its own also turns up as a constant in decoders, in
 compressed data and in code. The header checks are:
-  gzip   deflate, no reserved flag bit, XFL 0/2/4, OS 0-13 or 255; or
-         any gzip header whose first 1 MiB decodes without an error
+  gzip   deflate, no reserved flag bit, XFL 0/2/4, OS 0-13 or 255
+  gzip-lax  any other gzip magic + deflate method byte, its header parsed
+         as gzip -d parses it (FEXTRA, FNAME, FCOMMENT, FHCRC skipped; XFL,
+         OS, reserved flags and the header CRC ignored), whose deflate data
+         decodes to at least one byte before an error, its end, or the end
+         of the file; there is no fixed window
+  gzip-kernel  the same with the header parsed as Linux's gunzip does it
+         (only FNAME skipped): any gzip magic whose FEXTRA, FCOMMENT or FHCRC
+         flag makes the two parses differ
   xz     stream flags with a valid CRC32
   lzma   props 0x5d, a dictionary of 2^n or 3*2^(n-1) bytes (4 KiB-1 GiB);
          inside a file only with the size unknown (8 x 0xff), as `lzma -9`
@@ -39,7 +46,12 @@ a cpio archive, only the data of the regular members written out). Every
 stream that passes is unpacked by its own decoder up to its own end (data
 after it is ignored; for gzip, every member that follows), and a stream that
 then fails to decode, ends early or decodes to more than MAXOUT bytes is an
-error: the caller fails closed. A cpio member that is not a regular file or a
+error: the caller fails closed. gzip-lax and gzip-kernel are the exception:
+what they decode up to an error or the end of the file is what gzip -d or the
+kernel would have written out, so it is unpacked and scanned (random bytes
+after a gzip magic often decode a few bytes before an error, so refusing them
+would refuse clean images); such a stream claims no range (its end is
+printed as <offset> + 1), so every stream inside it is unpacked as well. A cpio member that is not a regular file or a
 link but carries data is an error too. Only the Python standard library, plus the zstd, lz4 and lzop tools.
 """
 import bz2
@@ -67,28 +79,86 @@ class Bad(Exception):
 
 # --- header checks: (format, magic regex, check(data, offset, at_start)) -----
 
-def ok_gzip(d, o, start):
-    if start:
-        return True
+def strict_gzip(d, o):
     h = d[o:o + 10]
-    if len(h) == 10 and not h[3] & 0xe0 and h[8] in (0, 2, 4) and (h[9] <= 13 or h[9] == 255):
-        return True
-    # gzip -d ignores XFL and OS: a header that fails the check above but
-    # decodes is a stream all the same
-    return gzip_trial(d, o)
+    return len(h) == 10 and not h[3] & 0xe0 and h[8] in (0, 2, 4) and (h[9] <= 13 or h[9] == 255)
 
 
-TRIAL = 1 << 20
+def ok_gzip(d, o, start):
+    return start or strict_gzip(d, o)
 
-def gzip_trial(d, o):
-    """the first TRIAL bytes at <o> decode as gzip without an error, to some
-    output or to the end of the member"""
-    z = zlib.decompressobj(31)
-    try:
-        out = z.decompress(d[o:o + TRIAL], 4096)
-    except zlib.error:
+
+def gzip_body(d, o, kernel):
+    """where the deflate data of the gzip header at <o> starts, or None when
+    the header runs past the end of the file. gzip -d (and zlib) skip FEXTRA,
+    FNAME, FCOMMENT and FHCRC; Linux's lib/decompress_inflate.c skips only
+    FNAME and reads the rest as deflate data"""
+    f, p = d[o + 3], o + 10
+    if f & 4 and not kernel:
+        if p + 2 > len(d):
+            return None
+        p += 2 + struct.unpack("<H", d[p:p + 2])[0]
+    for bit in (8, 16):
+        if f & bit and (bit == 8 or not kernel):
+            q = d.find(b"\0", p)
+            if q < 0:
+                return None
+            p = q + 1
+    if f & 2 and not kernel:
+        p += 2
+    return p if p <= len(d) else None
+
+
+class Output(Exception):
+    pass
+
+
+def output(b):
+    if b:
+        raise Output()
+
+
+def inflate(d, p, write):
+    """raw deflate from <p>, as far as it decodes, every byte it decodes
+    passed to <write>: (offset, how it stopped). "end": the deflate stream
+    ends at offset; "error": the byte at offset is where it fails (the
+    output up to it, as a streaming decoder writes it, is written too);
+    "eof": the file ends first"""
+    z, step = zlib.decompressobj(-15), 4096
+    while p < len(d):
+        chunk, saved = d[p:p + step], z.copy()
+        try:
+            write(z.decompress(chunk))
+        except zlib.error:
+            # again one byte at a time from before the chunk: what decodes
+            # up to the bad byte is written out
+            z = saved
+            for i in range(p, p + len(chunk)):
+                try:
+                    write(z.decompress(d[i:i + 1]))
+                except zlib.error:
+                    return i, "error"
+                if z.eof:
+                    return i + 1, "end"
+            raise Bad("gzip: an error that one byte at a time does not repeat")
+        if z.eof:
+            return p + len(chunk) - len(z.unused_data), "end"
+        p += len(chunk)
+    write(z.flush())
+    return len(d), "eof"
+
+
+def lax_gzip(d, o, kernel):
+    """the deflate data after the header (parsed as gzip -d or the kernel
+    does) decodes to at least one byte"""
+    p = gzip_body(d, o, kernel)
+    if p is None:
         return False
-    return bool(out) or z.eof
+    try:
+        inflate(d, p, output)
+    except Output:
+        return True
+    return False
 
 
 def ok_xz(d, o, start):
@@ -189,8 +259,14 @@ def scan(path):
                 if not m:
                     break
                 o = m.start()
-                if ok(d, o, o == 0) and (name, o) not in out:
-                    out.append((name, o))
+                if ok(d, o, o == 0):
+                    if (name, o) not in out:
+                        out.append((name, o))
+                elif name == "gzip" and lax_gzip(d, o, False):
+                    out.append(("gzip-lax", o))
+                # where the kernel would read other deflate data, that too
+                if name == "gzip" and o + 3 < len(d) and d[o + 3] & 0x16 and lax_gzip(d, o, True):
+                    out.append(("gzip-kernel", o))
     out.sort(key=lambda x: x[1])
     # the member headers of one cpio archive are not archives of their own
     end, kept = 0, []
@@ -241,6 +317,37 @@ def un_gzip(d, o, out):
             o = into(Zlib(), d, o, s, "gzip")
             if d[o:o + 2] != b"\x1f\x8b":
                 return o
+    finally:
+        s.close()
+
+
+def un_gzip_lax(d, o, out, kernel):
+    """one member, decoded as gzip -d (or the kernel) decodes it: the header
+    parsed leniently, the trailer not checked, the output up to an error or
+    the end of the file kept. A member that ends cleanly ends at its trailer
+    (and a member after it is decoded too); otherwise the stream claims no
+    range: <o> + 1"""
+    p = gzip_body(d, o, kernel)
+    if p is None:
+        raise Bad("gzip header runs past the end of the file")
+    s = Sink(out)
+    try:
+        e, how = inflate(d, p, s.write)
+        if how != "end" or e + 8 > len(d):
+            return o + 1
+        e += 8
+        while d[e:e + 3] == b"\x1f\x8b\x08" and not kernel:
+            if strict_gzip(d, e):
+                e = into(Zlib(), d, e, s, "gzip")
+                continue
+            q = gzip_body(d, e, False)
+            if q is None:
+                break
+            q, how = inflate(d, q, s.write)
+            if how != "end" or q + 8 > len(d):
+                break
+            e = q + 8
+        return e
     finally:
         s.close()
 
@@ -489,6 +596,8 @@ def un_ubi(d, o, out):
 
 DECODERS = {
     "gzip": un_gzip,
+    "gzip-lax": lambda d, o, out: un_gzip_lax(d, o, out, False),
+    "gzip-kernel": lambda d, o, out: un_gzip_lax(d, o, out, True),
     "xz": lambda d, o, out: py_stream(lzma.LZMADecompressor(lzma.FORMAT_XZ), d, o, out, "xz"),
     "lzma": lambda d, o, out: py_stream(lzma.LZMADecompressor(lzma.FORMAT_ALONE), d, o, out, "lzma"),
     "bzip2": lambda d, o, out: py_stream(bz2.BZ2Decompressor(), d, o, out, "bzip2"),
