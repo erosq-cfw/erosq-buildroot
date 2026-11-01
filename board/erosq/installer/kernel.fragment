@@ -2,9 +2,10 @@
 # It must stay under the stock bootloader's 4 MiB read (check-uimage.sh), so
 # everything an installer does not need is off. It keeps NAND (SFC + SPI-NAND
 # + UBI), the SD card (MMC + VFAT), loop + ISO9660 (to mount update.upt), the
-# PMIC (AXP2101: poweroff), the panel with a framebuffer console, so the
-# owner can watch the log on the screen (there is no serial port for them),
-# and, for the rescue menu, the buttons and a USB drive mode.
+# PMIC (AXP2101: poweroff, and the battery the write gates read), the panel
+# with a framebuffer console, so the owner can watch the log on the screen
+# (there is no serial port for them), and, for the rescue menu, the buttons
+# and a USB drive mode.
 CONFIG_BLK_DEV_INITRD=y
 CONFIG_MIPS_RAW_APPENDED_DTB=y
 # CONFIG_MIPS_NO_APPENDED_DTB is not set
@@ -29,6 +30,10 @@ CONFIG_USB_CONFIGFS_MASS_STORAGE=y
 # CONFIG_USB_CONFIGFS_ECM is not set
 # CONFIG_USB_MASS_STORAGE is not set
 # CONFIG_USB_ETH is not set
+# The AXP2101 battery: the rescue menu's write gates and USB drive mode read
+# its capacity and status. The firmware config has it; listed so it stays.
+CONFIG_POWER_SUPPLY=y
+CONFIG_BATTERY_AXP2101=y
 # The buttons, for the rescue menu: the gpio-keys node of the board DT and
 # evdev. VT selects INPUT anyway, so INPUT was never really off; the rest of
 # the input drivers are.

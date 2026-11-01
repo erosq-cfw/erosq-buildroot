@@ -204,6 +204,7 @@ for m in install upt restore uninstall; do
     il_pass_drops_mode "$m"; ck "PASS of $m removes the mode file" 0 $?
 done
 il_pass_drops_mode backup; ck "PASS of backup keeps the mode file" 1 $?
+il_pass_drops_mode stock; ck "PASS of stock removes the mode file" 0 $?
 il_pass_drops_mode ""; ck "no mode: nothing to remove" 1 $?
 
 # --- il_entry (no mode file: who booted the installer) ---
@@ -234,6 +235,26 @@ ck "move down wraps"    1 "$(il_menu_move 4 4 down)"
 ck "move up"            3 "$(il_menu_move 4 4 up)"
 ck "move up wraps"      4 "$(il_menu_move 1 4 up)"
 ck "select stays"       2 "$(il_menu_move 2 4 select)"
+
+# --- il_battery (capacity, status of the AXP2101 power_supply, min %) ---
+ck "battery: 50 % on battery, min 50 -> ok"    ok      "$(il_battery 50 Discharging 50)"
+ck "battery: 49 % on battery, min 50 -> low"   low     "$(il_battery 49 Discharging 50)"
+ck "battery: 5 % charging -> ok"               ok      "$(il_battery 5 Charging 50)"
+ck "battery: full -> ok"                       ok      "$(il_battery 100 Full 50)"
+ck "battery: 5 % on the charger, idle -> ok"   ok      "$(il_battery 5 'Not charging' 50)"
+ck "battery: no capacity -> unknown"           unknown "$(il_battery "" Discharging 50)"
+ck "battery: nothing readable -> unknown"      unknown "$(il_battery "" "" 50)"
+ck "battery: garbage capacity -> unknown"      unknown "$(il_battery 5x Discharging 50)"
+ck "battery: capacity over 100 -> unknown"     unknown "$(il_battery 101 Discharging 50)"
+ck "battery: USB-mode floor, 9 % -> low"       low     "$(il_battery 9 Discharging 10)"
+ck "battery: USB-mode floor, 10 % -> ok"       ok      "$(il_battery 10 Discharging 10)"
+
+# --- il_hw_check (whole-chip size, AXP2101 battery present) ---
+il_hw_check 134217728 1 >/dev/null; ck "hw: 128 MiB chip + AXP2101 -> ok" 0 $?
+il_hw_check 268435456 1 >/dev/null; ck "hw: 256 MiB chip -> refused" 1 $?
+il_hw_check "" 1 >/dev/null;        ck "hw: chip size unknown -> refused" 1 $?
+il_hw_check 134217728 0 >/dev/null; ck "hw: no AXP2101 -> refused" 1 $?
+ck "hw: says why" "the chip is 268435456 bytes, not 134217728" "$(il_hw_check 268435456 1)"
 
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

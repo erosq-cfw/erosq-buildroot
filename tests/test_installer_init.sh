@@ -60,6 +60,10 @@ printf "\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x01\\x00\\x$(printf %02x $((k 
 	stub reboot 'echo reboot > "$R/action"; kill -KILL $PPID'
 	stub poweroff 'echo poweroff > "$R/action"; kill -KILL $PPID'
 	: > "$R/writes"
+	# the AXP2101 battery: full, on battery power
+	mkdir -p "$R/sys/class/power_supply/axp2101-battery"
+	echo 100 > "$R/sys/class/power_supply/axp2101-battery/capacity"
+	echo Discharging > "$R/sys/class/power_supply/axp2101-battery/status"
 }
 
 # mkupt <dir>: our update.upt at the card root (the mount stub serves the
@@ -178,6 +182,96 @@ ck "rescue, USB drive mode: the gadget is unbound after" "" "$(cat "$G/UDC")"
 ck "rescue, USB drive mode: the LUN is empty after" "" "$(cat "$G/functions/mass_storage.0/lun.0/file")"
 ck "rescue, USB drive mode: removable LUN" 1 "$(cat "$G/functions/mass_storage.0/lun.0/removable")"
 ck "rescue, USB drive mode: nothing written" "$(cat "$T/w1")" "$(cat "$R/writes")"
+
+# --- rescue: the battery and hardware gates run before every write option -----------
+B=$R/sys/class/power_supply/axp2101-battery
+cp "$R/writes" "$T/w2"
+echo 30 > "$B/capacity"
+# Reinstall at 30 % on battery: refused before the confirm, back to the menu
+printf '164\n164\n' > "$R/keys"
+ck "gate, reinstall at 30 %: powers off at idle" poweroff "$(boot "$R")"
+ck "gate, reinstall at 30 %: nothing written" "$(cat "$T/w2")" "$(cat "$R/writes")"
+ck "gate, reinstall at 30 %: no mode file" no "$(yes_ test -e "$S/mode")"
+ck "gate, reinstall at 30 %: recorded" "FAIL|gate-battery|battery 30 % (Discharging), below 50 % with no charger
+INFO|rescue|no key for 120 s (powering off)" "$(tail -n2 "$S/result.txt")"
+# Restore at 30 %
+truncate -s 134217728 "$S/flash.img"
+printf '114\n164\n164\n' > "$R/keys"
+ck "gate, restore at 30 %: powers off at idle" poweroff "$(boot "$R")"
+ck "gate, restore at 30 %: nothing written" "$(cat "$T/w2")" "$(cat "$R/writes")"
+ck "gate, restore at 30 %: no mode file" no "$(yes_ test -e "$S/mode")"
+ck "gate, restore at 30 %: recorded" yes "$(yes_ test "$(grep -c '^FAIL|gate-battery|' "$S/result.txt")" -eq 2)"
+rm -f "$S/flash.img"
+# Uninstall at 30 % (flash-backup.img is the one the upt run took)
+: > "$S/stock.upt"
+printf '114\n114\n164\n164\n' > "$R/keys"
+ck "gate, uninstall at 30 %: powers off at idle" poweroff "$(boot "$R")"
+ck "gate, uninstall at 30 %: nothing written" "$(cat "$T/w2")" "$(cat "$R/writes")"
+ck "gate, uninstall at 30 %: no mode file" no "$(yes_ test -e "$S/mode")"
+ck "gate, uninstall at 30 %: recorded" yes "$(yes_ test "$(grep -c '^FAIL|gate-battery|' "$S/result.txt")" -eq 3)"
+rm -f "$S/stock.upt"
+# No readable battery: refused too
+echo x > "$B/capacity"
+printf '164\n164\n' > "$R/keys"
+ck "gate, reinstall with no readable battery: powers off at idle" poweroff "$(boot "$R")"
+ck "gate, reinstall with no readable battery: nothing written" "$(cat "$T/w2")" "$(cat "$R/writes")"
+ck "gate, reinstall with no readable battery: recorded" yes "$(yes_ grep -q '^FAIL|gate-battery|cannot read the battery' "$S/result.txt")"
+echo 100 > "$B/capacity"
+# The wrong chip (a 256 MiB part): the hardware gate refuses
+WC=$R/sys/class/mtd/mtd4; echo 268435456 > "$WC/size"
+printf '164\n164\n' > "$R/keys"
+ck "gate, reinstall on a 256 MiB chip: powers off at idle" poweroff "$(boot "$R")"
+ck "gate, reinstall on a 256 MiB chip: nothing written" "$(cat "$T/w2")" "$(cat "$R/writes")"
+ck "gate, reinstall on a 256 MiB chip: recorded" yes \
+	"$(yes_ grep -q '^FAIL|gate-hw|the chip is 268435456 bytes, not 134217728' "$S/result.txt")"
+echo 134217728 > "$WC/size"
+# No AXP2101 battery at all: the hardware gate refuses
+mv "$B" "$T/batt"
+printf '164\n164\n' > "$R/keys"
+ck "gate, reinstall with no AXP2101: powers off at idle" poweroff "$(boot "$R")"
+ck "gate, reinstall with no AXP2101: nothing written" "$(cat "$T/w2")" "$(cat "$R/writes")"
+ck "gate, reinstall with no AXP2101: recorded" yes "$(yes_ grep -q '^FAIL|gate-hw|no AXP2101' "$S/result.txt")"
+mv "$T/batt" "$B"
+
+# USB drive mode at 5 % on battery: the card comes back and the unit powers off
+echo 5 > "$B/capacity"
+printf '114\n114\n114\n164\n' > "$R/keys"
+ck "USB drive mode at 5 %: powers off" poweroff "$(boot "$R")"
+ck "USB drive mode at 5 %: recorded" "INFO|rescue|USB drive mode
+WARN|rescue|battery 5 % in USB drive mode, no charger (powering off)" "$(tail -n2 "$S/result.txt")"
+ck "USB drive mode at 5 %: the gadget is unbound" "" "$(cat "$G/UDC")"
+ck "USB drive mode at 5 %: the LUN is empty" "" "$(cat "$G/functions/mass_storage.0/lun.0/file")"
+ck "USB drive mode at 5 %: nothing written" "$(cat "$T/w2")" "$(cat "$R/writes")"
+echo 100 > "$B/capacity"
+# The battery runs down while the card is on the computer: a read that times
+# out (the clock moved on USB_POLL s) looks at the battery again
+echo 0 > "$R/clock"
+printf '#!/usr/bin/env bash\nn=$(cat %s/clock); echo $((n + 30)) > %s/clock; echo "$n"\n[ "$n" -lt 30 ] || echo 5 > %s/capacity\n' "$R" "$R" "$B" > "$R/bin/date"
+chmod +x "$R/bin/date"
+printf '114\n114\n114\n164\n' > "$R/keys"
+ck "USB drive mode, battery runs down: powers off" poweroff "$(boot "$R")"
+ck "USB drive mode, battery runs down: recorded" "INFO|rescue|USB drive mode
+WARN|rescue|battery 5 % in USB drive mode, no charger (powering off)" "$(tail -n2 "$S/result.txt")"
+rm -f "$R/bin/date" "$R/clock"
+echo 100 > "$B/capacity"
+
+# --- stock: PASS removes the mode file too ---------------------------------------------
+R=$T/stock; mkunit "$R"; mkdir -p "$R/mnt/$E"; echo stock > "$R/mnt/$E/mode"
+i=6
+for p in stockboot:3145728 stockrootfs:67108864 stockdata:50331648; do
+	mkdir -p "$R/sys/class/mtd/mtd$i"; echo "${p%%:*}" > "$R/sys/class/mtd/mtd$i/name"
+	echo "${p#*:}" > "$R/sys/class/mtd/mtd$i/size"; echo 0 > "$R/sys/class/mtd/mtd$i/bad_blocks"
+	truncate -s "${p#*:}" "$R/dev/mtd$i"; i=$((i+1))
+done
+d=$R/mnt/$E/stock.upt.d; mkdir -p "$d"; : > "$R/mnt/$E/stock.upt"
+printf 'stock u-boot' > "$d/uboot.bin"; printf 'stock kernel' > "$d/uimage.bin"; printf 'UBI#stock' > "$d/system.ubi"
+printf 'name=erosq_2024\n' > "$d/version.txt"
+for m in uboot.bin uimage.bin system.ubi; do
+	printf '%s={\n        file_path=autoupdate/%s\n        md5=%s\n}\n' "${m%.*}" "$m" "$(md5sum < "$d/$m" | cut -d' ' -f1)"
+done > "$d/update.txt"
+ck "stock: reboots after the restore" reboot "$(boot "$R")"
+ck "stock: PASS recorded" yes "$(yes_ grep -q '^PASS|stock|' "$R/mnt/$E/result.txt")"
+ck "stock: mode file removed on PASS" no "$(yes_ test -e "$R/mnt/$E/mode")"
 
 # --- no mode file, stock bootloader, no update.upt: as before ----------------------
 R=$T/none; mkunit "$R"; mkdir -p "$R/mnt/$E"

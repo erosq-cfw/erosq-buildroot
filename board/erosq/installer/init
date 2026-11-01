@@ -101,9 +101,15 @@ fi
 # Shown when our U-Boot boots this installer from the card with no mode file.
 # It writes nothing by itself: each choice that writes the chip asks for a
 # second press of Play, then writes the mode file and carries on below as
-# that mode, through the same gates. No key for MENU_IDLE seconds powers off.
+# that mode, through the same gates. Before that question each of them runs
+# the hardware and battery gates (write_gates). No key for MENU_IDLE seconds
+# powers off.
 TTY=/dev/tty0
 MENU_IDLE=120
+BATT=/sys/class/power_supply/axp2101-battery
+BATT_MIN=50   # a menu write on battery needs this much (%)
+USB_LOW=10    # USB drive mode on battery powers off below this (%)
+USB_POLL=30   # USB drive mode looks at the battery this often (s)
 ITEMS="reinstall restore uninstall usb poweroff"
 
 uboot_is_ours() { # the U-Boot on the chip carries our A/B boot env
@@ -161,20 +167,54 @@ need() { # need <file> <message>: rc 1 (and say so) when <file> is missing
     notice "$2"
     return 1
 }
+batt() { # batt <min %>: B_V = ok|low|unknown, with B_CAP and B_ST as read
+    B_CAP=$(cat "$BATT/capacity" 2>/dev/null) || B_CAP=
+    B_ST=$(cat "$BATT/status" 2>/dev/null) || B_ST=
+    B_V=$(il_battery "$B_CAP" "$B_ST" "$1")
+}
+write_gates() { # rc 0 when this unit and its battery may be written; else says why
+    # The hardware first: a chip of another size or no AXP2101 is not a unit
+    # this installer knows, whatever the battery says.
+    _sz=
+    _wc=$(il_mtd_by_name wholechip) && _sz=$(cat "/sys/class/mtd/$_wc/size" 2>/dev/null)
+    _pm=0; [ -d "$BATT" ] && _pm=1
+    if ! _why=$(il_hw_check "$_sz" "$_pm"); then
+        rec FAIL gate-hw "$_why"
+        notice "Not a unit this installer knows: $_why."
+        return 1
+    fi
+    # A battery that dies mid-write can leave a chip only maskrom recovers.
+    batt "$BATT_MIN"
+    case "$B_V" in
+    ok)
+        rec PASS gate-battery "battery ${B_CAP:-?} % ($B_ST)" ;;
+    low)
+        rec FAIL gate-battery "battery $B_CAP % ($B_ST), below $BATT_MIN % with no charger"
+        notice "Battery $B_CAP %. Plug in the charger, or charge to $BATT_MIN %."
+        return 1 ;;
+    *)
+        rec FAIL gate-battery "cannot read the battery"
+        notice "Cannot read the battery, so nothing is written."
+        return 1 ;;
+    esac
+}
 pick() { # pick <item>: rc 0 once the mode file is written, 1 = back to the menu
     case "$1" in
     reinstall)
         UPT=$(il_find_ci "$SD" update.upt) || UPT=
         need "$UPT" "No update.upt at the card root." || return 1
+        write_gates || return 1
         confirm "Reinstall erases the player (the card is kept)." || return 1
         _m=upt ;;
     restore)
         need "$DIR/flash.img" "No erosq-install/flash.img on the card." || return 1
+        write_gates || return 1
         confirm "Restore writes the whole chip from flash.img." || return 1
         _m=restore ;;
     uninstall)
         need "$DIR/flash-backup.img" "No erosq-install/flash-backup.img on the card." || return 1
         need "$DIR/stock.upt" "No erosq-install/stock.upt (the official update) on the card." || return 1
+        write_gates || return 1
         confirm "Uninstall puts the stock firmware back." || return 1
         _m=uninstall ;;
     usb)
@@ -229,10 +269,26 @@ usb_drive() { # the whole card to a computer as a USB drive, until Back
     show "The card is on the computer. Eject it there,"
     show "then press Back here."
     # No idle power-off here: that would pull the card from under a copy.
-    # A read that returns nothing (the input device failed) ends it too.
+    # But a battery that runs flat would pull it anyway, and with no clean
+    # shutdown: every USB_POLL s with no key, look at the battery, and below
+    # USB_LOW % with no charger, take the card back and power off.
+    # A read that returns nothing before USB_POLL s (the input device
+    # failed) ends the mode.
     while :; do
-        _ev=$(dd if="$EV" bs=16 count=1 2>/dev/null | od -An -tu2)
-        [ -n "$_ev" ] || break
+        batt "$USB_LOW"
+        if [ "$B_V" = low ]; then
+            echo "" > "$_g/UDC" 2>/dev/null
+            echo "" > "$_lun/file" 2>/dev/null
+            mount_sd || say "the card did not mount again"
+            rec WARN rescue "battery $B_CAP % in USB drive mode, no charger (powering off)"
+            halt_forever
+        fi
+        _t0=$(date +%s)
+        _ev=$(timeout "$USB_POLL" dd if="$EV" bs=16 count=1 2>/dev/null | od -An -tu2)
+        if [ -z "$_ev" ]; then
+            [ $(($(date +%s) - _t0)) -ge $((USB_POLL - 1)) ] && continue
+            break
+        fi
         _k=$(il_key_press "$_ev") || continue
         [ "$(il_menu_key "$_k")" = back ] && break
     done
@@ -800,6 +856,8 @@ stock)
     DATA_MTD=$(il_mtd_by_name stockdata) || finish FAIL stock "no stockdata mtd"
 
     run_plan stock
+    # finish removes the mode file (il_pass_drops_mode): left on the card,
+    # it would put the stock firmware back on every boot of this installer.
     # Not a complete factory restore. The stock chip has a `recovery`
     # partition at 0x900000 (7 MiB) whose kernel is the stock updater, the
     # one the stock Firmware Update entry boots. The official update has no

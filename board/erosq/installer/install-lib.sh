@@ -202,10 +202,10 @@ il_backup_verdict() {
 # file. A mode file left on the card runs again the next time this installer
 # boots, and the installer stays on the card as the rescue system: a stale
 # install or upt would wipe the unit (and /data) with nobody asking for it, a
-# stale restore or uninstall would write the chip again.
+# stale restore, stock or uninstall would write the chip again.
 il_pass_drops_mode() {
     case "$1" in
-        install|upt|restore|uninstall) return 0 ;;
+        install|upt|stock|restore|uninstall) return 0 ;;
     esac
     return 1
 }
@@ -257,4 +257,28 @@ il_menu_move() {
         down) if [ "$1" -ge "$2" ]; then echo 1; else echo $(($1 + 1)); fi ;;
         *)    echo "$1" ;;
     esac
+}
+
+# il_battery <capacity> <status> <min %> -> ok|low|unknown, from the AXP2101
+# power_supply. With input power (Charging, Full, or "Not charging": the
+# charger is there but idle) the battery cannot run down under a write: ok.
+# On battery: ok at <min> % or more, low below it. A capacity that is not a
+# number from 0 to 100 is unknown, and the caller refuses on it.
+il_battery() {
+    case "$2" in Charging|Full|'Not charging') echo ok; return 0 ;; esac
+    case "$1" in ''|*[!0-9]*) echo unknown; return 0 ;; esac
+    if [ "$1" -gt 100 ]; then echo unknown
+    elif [ "$1" -ge "$3" ]; then echo ok
+    else echo low
+    fi
+}
+
+# il_hw_check <wholechip bytes> <AXP2101 battery present 0|1> -> rc 0, or
+# rc 1 and the reason. The hw4 EROS Q has a 128 MiB SPI NAND and an AXP2101
+# PMIC; the installer's images and backups are linear 128 MiB images, so any
+# other chip size is not a unit this installer knows. What tells hw3 from
+# hw4 is not known, so neither is checked here.
+il_hw_check() {
+    [ "$1" = 134217728 ] || { echo "the chip is ${1:-of unknown size} bytes, not 134217728"; return 1; }
+    [ "$2" = 1 ] || { echo "no AXP2101 battery (another PMIC, or its driver did not bind)"; return 1; }
 }
