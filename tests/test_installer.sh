@@ -4,8 +4,8 @@
 # (one byte over included) or with the wrong header, build-upt.py writes the
 # stock .upt shape and refuses wrong payloads, and check-payload.sh finds keys,
 # Wi-Fi credentials and private names inside a squashfs.
-# Needs mkimage/dumpimage, dtc, mksquashfs/unsquashfs, cpio, xz, zstd, openssl and PYTHON (default python3)
-# with pycdlib.
+# Needs mkimage/dumpimage, dtc, mksquashfs/unsquashfs, cpio, xz, zstd, lz4, bzip2, openssl and PYTHON
+# (default python3) with pycdlib.
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 I="$HERE/board/erosq/installer"
@@ -143,6 +143,32 @@ deep "$T/planted.upt" "an authorized_keys inside the installer inside a .upt"
 printf 'build zq-private-host\n' | zstd -q > "$T/n.zst"
 ANON_PATTERNS='zq-private' sh "$I/check-payload.sh" "$T/n.zst" >/dev/null 2>&1 &&
 	fail "check-payload missed a private name in a zstd stream"
+# it fails closed: every format it knows is unpacked, wherever it starts,
+# and what it cannot unpack is a FAIL
+mkcpio "$T/ir.cpio.gz"; gzip -dc "$T/ir.cpio.gz" > "$T/ir.cpio"
+blob() { head -c 300000 /dev/urandom; cat; head -c 1000 /dev/urandom; }
+lz4 -lq -c "$T/ir.cpio" | blob > "$T/k-lz4.bin" || fail lz4
+deep "$T/k-lz4.bin" "an authorized_keys in an lz4 (legacy) initramfs inside a kernel blob"
+blob < "$T/ir.cpio" > "$T/k-cpio.bin"
+deep "$T/k-cpio.bin" "an authorized_keys in a raw cpio inside a kernel blob"
+printf 'network={\n psk="planted"\n}\n' | bzip2 -9 > "$T/w.bz2" || fail bzip2
+deep "$T/w.bz2" "a Wi-Fi passphrase in a bzip2 stream"
+if command -v lzop >/dev/null; then
+	printf 'network={\n psk="planted"\n}\n' | lzop -c > "$T/w.lzo" || fail lzop
+	deep "$T/w.lzo" "a Wi-Fi passphrase in an lzo stream"
+else # an lzo stream it cannot unpack (no lzop) fails the gate
+	{ printf '\211LZO\000\r\n\032\n'; head -c 100 /dev/zero; } > "$T/w.lzo"
+	deep "$T/w.lzo" "an lzo stream it cannot unpack"
+fi
+printf 'network={\n psk="planted"\n}\n' > "$T/nest"
+for n in 1 2 3 4 5 6 7; do gzip -n < "$T/nest" > "$T/nest.gz" && mv "$T/nest.gz" "$T/nest"; done
+deep "$T/nest" "a gzip stream still nested at the depth limit"
+yes 'firmware v2026.11.0' | head -c 20000 | gzip -9n > "$T/bad.gz"
+printf 'X' | dd of="$T/bad.gz" bs=1 seek=40 conv=notrunc 2>/dev/null
+deep "$T/bad.gz" "a corrupt gzip stream"
+# a bare magic number (a constant in a decoder) is not a stream
+{ head -c 300000 /dev/zero; printf '\375\067zXZ\000 and \211LZO\000\r\n\032\n and 070701'; head -c 300 /dev/zero; } > "$T/consts"
+sh "$I/check-payload.sh" "$T/consts" >/dev/null 2>&1 || fail "check-payload refused bare magic numbers in a blob"
 # and a clean compressed installer passes
 { head -c 300000 /dev/zero; head -c 1000 /dev/zero | gzip -9n; } | gzip -9n > "$T/clean.gz"
 mkimage -A mips -O linux -T kernel -C gzip -a 0x80100000 -e 0x80100000 -n k \
