@@ -90,7 +90,8 @@ i=0; while [ $i -lt 20 ] && [ ! -e /sys/class/mtd/mtd0/name ]; do sleep 1; i=$((
 
 # Do not silence the second mount: if both fail there is no result.txt, and
 # the kmsg line is the only trace of why.
-if mount -t vfat /dev/mmcblk0p1 "$SD" 2>/dev/null || mount -t vfat /dev/mmcblk0 "$SD"; then
+mount_sd() { mount -t vfat /dev/mmcblk0p1 "$SD" 2>/dev/null || mount -t vfat /dev/mmcblk0 "$SD"; }
+if mount_sd; then
     say "SD mounted on $SD"
 else
     bail "FATAL: SD did not mount as vfat (exFAT card? no card? bad card?) -- no result.txt is possible"
@@ -103,7 +104,7 @@ fi
 # that mode, through the same gates. No key for MENU_IDLE seconds powers off.
 TTY=/dev/tty0
 MENU_IDLE=120
-ITEMS="reinstall restore uninstall poweroff"
+ITEMS="reinstall restore uninstall usb poweroff"
 
 uboot_is_ours() { # the U-Boot on the chip carries our A/B boot env
     _ub=$(il_mtd_by_name uboot) || return 1
@@ -151,10 +152,13 @@ confirm() { # confirm <what>: rc 0 on a second press of Play
     _a=$(read_key) || idle_off
     [ "$_a" = select ]
 }
+notice() { # notice <message>: show it until a key
+    show ""; show "$1"; show "Press Play or Back."
+    read_key >/dev/null || idle_off
+}
 need() { # need <file> <message>: rc 1 (and say so) when <file> is missing
     [ -f "$1" ] && return 0
-    show ""; show "$2"; show "Press Play or Back."
-    read_key >/dev/null || idle_off
+    notice "$2"
     return 1
 }
 pick() { # pick <item>: rc 0 once the mode file is written, 1 = back to the menu
@@ -173,6 +177,9 @@ pick() { # pick <item>: rc 0 once the mode file is written, 1 = back to the menu
         need "$DIR/stock.upt" "No erosq-install/stock.upt (the official update) on the card." || return 1
         confirm "Uninstall puts the stock firmware back." || return 1
         _m=uninstall ;;
+    usb)
+        usb_drive
+        return 1 ;;
     poweroff)
         rec INFO rescue "power off chosen"
         halt_forever ;;
@@ -183,6 +190,56 @@ pick() { # pick <item>: rc 0 once the mode file is written, 1 = back to the menu
     sync
     rec INFO rescue "chose $1 (mode=$_m)"
     printf '\033[2J\033[H' > "$TTY" 2>/dev/null
+}
+usb_drive() { # the whole card to a computer as a USB drive, until Back
+    _g=/sys/kernel/config/usb_gadget/rescue
+    _lun=$_g/functions/mass_storage.0/lun.0
+    _udc=
+    for _u in /sys/class/udc/*; do [ -e "$_u" ] && { _udc=${_u##*/}; break; }; done
+    if [ -z "$_udc" ]; then
+        notice "No USB device controller."; return
+    fi
+    grep -q ' /sys/kernel/config ' /proc/mounts || mount -t configfs none /sys/kernel/config
+    if [ ! -d "$_g" ]; then
+        # configfs makes lun.0 with the function; -p takes it as it is
+        mkdir -p "$_g/strings/0x409" "$_lun" "$_g/configs/c.1/strings/0x409"
+        echo 0x1d6b > "$_g/idVendor"    # Linux Foundation
+        echo 0x0104 > "$_g/idProduct"   # Multifunction Composite Gadget
+        echo "EROS Q"        > "$_g/strings/0x409/manufacturer"
+        echo "EROS Q rescue" > "$_g/strings/0x409/product"
+        echo 1 > "$_lun/removable"
+        ln -s "$_g/functions/mass_storage.0" "$_g/configs/c.1/"
+    fi
+    # The computer gets the card, so nothing here may hold it: result.txt
+    # first, then unmount.
+    rec INFO rescue "USB drive mode"
+    sync
+    if ! umount "$SD"; then
+        notice "The card is busy."; return
+    fi
+    if ! { echo /dev/mmcblk0 > "$_lun/file" && echo "$_udc" > "$_g/UDC"; }; then
+        echo "" > "$_lun/file" 2>/dev/null
+        mount_sd || bail "FATAL: the card did not mount again"
+        rec WARN rescue "USB drive mode did not start"
+        notice "USB drive mode did not start."; return
+    fi
+    printf '\033[2J\033[H' > "$TTY" 2>/dev/null
+    show "USB drive mode"
+    show ""
+    show "The card is on the computer. Eject it there,"
+    show "then press Back here."
+    # No idle power-off here: that would pull the card from under a copy.
+    # A read that returns nothing (the input device failed) ends it too.
+    while :; do
+        _ev=$(dd if="$EV" bs=16 count=1 2>/dev/null | od -An -tu2)
+        [ -n "$_ev" ] || break
+        _k=$(il_key_press "$_ev") || continue
+        [ "$(il_menu_key "$_k")" = back ] && break
+    done
+    echo "" > "$_g/UDC" 2>/dev/null
+    echo "" > "$_lun/file" 2>/dev/null
+    mount_sd || bail "FATAL: the card did not mount again after USB drive mode"
+    rec INFO rescue "USB drive mode ended"
 }
 rescue_menu() {
     mkdir -p "$DIR" || bail "FATAL: cannot create $DIR on the SD card (write-protected? full?)"

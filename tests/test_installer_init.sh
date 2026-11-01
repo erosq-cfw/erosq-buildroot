@@ -158,6 +158,27 @@ ck "rescue, reinstall: wrote the chip again" yes "$(yes_ test "$(wc -l < "$R/wri
 ck "rescue, reinstall: mode file removed on PASS" no "$(yes_ test -e "$S/mode")"
 ck "rescue, reinstall: installer.uImage kept" yes "$(yes_ cmp -s "$R/mnt/update.upt.d/uimage.bin" "$S/installer.uImage")"
 
+# USB drive mode with no USB device controller: says so, back to the menu
+cp "$R/writes" "$T/w1"
+printf '114\n114\n114\n164\n164\n' > "$R/keys"
+ck "rescue, USB without a controller: powers off at idle" poweroff "$(boot "$R")"
+ck "rescue, USB without a controller: nothing written" "$(cat "$T/w1")" "$(cat "$R/writes")"
+ck "rescue, USB without a controller: no USB mode" no "$(yes_ grep -q 'USB drive mode' "$S/result.txt")"
+
+# USB drive mode: the card goes on the gadget's LUN, comes back after
+# (the fake event file reads empty, which ends the mode)
+mkdir -p "$R/sys/class/udc/fake.usb"
+G=$R/sys/kernel/config/usb_gadget/rescue
+printf '114\n114\n114\n164\n' > "$R/keys"
+ck "rescue, USB drive mode: powers off at idle after it" poweroff "$(boot "$R")"
+ck "rescue, USB drive mode: in and out of it" "INFO|rescue|USB drive mode
+INFO|rescue|USB drive mode ended
+INFO|rescue|no key for 120 s (powering off)" "$(tail -n3 "$S/result.txt")"
+ck "rescue, USB drive mode: the gadget is unbound after" "" "$(cat "$G/UDC")"
+ck "rescue, USB drive mode: the LUN is empty after" "" "$(cat "$G/functions/mass_storage.0/lun.0/file")"
+ck "rescue, USB drive mode: removable LUN" 1 "$(cat "$G/functions/mass_storage.0/lun.0/removable")"
+ck "rescue, USB drive mode: nothing written" "$(cat "$T/w1")" "$(cat "$R/writes")"
+
 # --- no mode file, stock bootloader, no update.upt: as before ----------------------
 R=$T/none; mkunit "$R"; mkdir -p "$R/mnt/$E"
 ck "stock bootloader, no mode, no update.upt: powers off" poweroff "$(boot "$R")"

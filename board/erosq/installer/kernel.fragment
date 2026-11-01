@@ -4,7 +4,7 @@
 # + UBI), the SD card (MMC + VFAT), loop + ISO9660 (to mount update.upt), the
 # PMIC (AXP2101: poweroff), the panel with a framebuffer console, so the
 # owner can watch the log on the screen (there is no serial port for them),
-# and the buttons for the rescue menu.
+# and, for the rescue menu, the buttons and a USB drive mode.
 CONFIG_BLK_DEV_INITRD=y
 CONFIG_MIPS_RAW_APPENDED_DTB=y
 # CONFIG_MIPS_NO_APPENDED_DTB is not set
@@ -16,7 +16,19 @@ CONFIG_ISO9660_FS=y
 CONFIG_CMDLINE="console=ttyS2,115200n8"
 # CONFIG_SOUND is not set
 # CONFIG_NET is not set
-# CONFIG_USB_SUPPORT is not set
+# USB device side only, for the rescue menu's USB drive mode: the DWC2
+# controller as a configfs mass-storage gadget. No host side, no legacy
+# gadget (one would take the controller at boot), no network function.
+CONFIG_USB_SUPPORT=y
+# CONFIG_USB is not set
+CONFIG_USB_DWC2=y
+CONFIG_USB_DWC2_PERIPHERAL=y
+CONFIG_USB_GADGET=y
+CONFIG_USB_CONFIGFS=y
+CONFIG_USB_CONFIGFS_MASS_STORAGE=y
+# CONFIG_USB_CONFIGFS_ECM is not set
+# CONFIG_USB_MASS_STORAGE is not set
+# CONFIG_USB_ETH is not set
 # The buttons, for the rescue menu: the gpio-keys node of the board DT and
 # evdev. VT selects INPUT anyway, so INPUT was never really off; the rest of
 # the input drivers are.
