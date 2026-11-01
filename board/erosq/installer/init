@@ -172,7 +172,9 @@ batt() { # batt <min %>: B_V = ok|low|unknown, with B_CAP and B_ST as read
     B_ST=$(cat "$BATT/status" 2>/dev/null) || B_ST=
     B_V=$(il_battery "$B_CAP" "$B_ST" "$1")
 }
-write_gates() { # rc 0 when this unit and its battery may be written; else says why
+write_gates() { # rc 0 when this unit and its battery may be written
+    # On a refusal it records why in result.txt and leaves the panel text
+    # in WG_MSG: the menu shows it with notice, run_plan ends the run on it.
     # The hardware first: a chip of another size or no AXP2101 is not a unit
     # this installer knows, whatever the battery says.
     _sz=
@@ -180,7 +182,7 @@ write_gates() { # rc 0 when this unit and its battery may be written; else says 
     _pm=0; [ -d "$BATT" ] && _pm=1
     if ! _why=$(il_hw_check "$_sz" "$_pm"); then
         rec FAIL gate-hw "$_why"
-        notice "Not a unit this installer knows: $_why."
+        WG_MSG="Not a unit this installer knows: $_why."
         return 1
     fi
     # A battery that dies mid-write can leave a chip only maskrom recovers.
@@ -190,11 +192,11 @@ write_gates() { # rc 0 when this unit and its battery may be written; else says 
         rec PASS gate-battery "battery ${B_CAP:-?} % ($B_ST)" ;;
     low)
         rec FAIL gate-battery "battery $B_CAP % ($B_ST), below $BATT_MIN % with no charger"
-        notice "Battery $B_CAP %. Plug in the charger, or charge to $BATT_MIN %."
+        WG_MSG="Battery $B_CAP %. Plug in the charger, or charge to $BATT_MIN %."
         return 1 ;;
     *)
         rec FAIL gate-battery "cannot read the battery"
-        notice "Cannot read the battery, so nothing is written."
+        WG_MSG="Cannot read the battery, so nothing is written."
         return 1 ;;
     esac
 }
@@ -203,18 +205,18 @@ pick() { # pick <item>: rc 0 once the mode file is written, 1 = back to the menu
     reinstall)
         UPT=$(il_find_ci "$SD" update.upt) || UPT=
         need "$UPT" "No update.upt at the card root." || return 1
-        write_gates || return 1
+        write_gates || { notice "$WG_MSG"; return 1; }
         confirm "Reinstall erases the player (the card is kept)." || return 1
         _m=upt ;;
     restore)
         need "$DIR/flash.img" "No erosq-install/flash.img on the card." || return 1
-        write_gates || return 1
+        write_gates || { notice "$WG_MSG"; return 1; }
         confirm "Restore writes the whole chip from flash.img." || return 1
         _m=restore ;;
     uninstall)
         need "$DIR/flash-backup.img" "No erosq-install/flash-backup.img on the card." || return 1
         need "$DIR/stock.upt" "No erosq-install/stock.upt (the official update) on the card." || return 1
-        write_gates || return 1
+        write_gates || { notice "$WG_MSG"; return 1; }
         confirm "Uninstall puts the stock firmware back." || return 1
         _m=uninstall ;;
     usb)
@@ -609,6 +611,14 @@ our_gates() { # our_gates <step>: P_UB, P_SPL, P_UBI are resolved and md5-gated
 # --- write steps (il_write_plan names them) ----------------------------------
 run_plan() { # run_plan <mode>
     _plan=$(il_write_plan "$1") || finish FAIL "$1" "no write plan for mode $1"
+    # Every mode that writes the chip comes through here, whatever entered
+    # it (the stock updater, a mode file, the rescue menu), so the hardware
+    # and battery gates run here, before the first step. The menu has run
+    # them once already, before its confirm; the backup since then took a
+    # while, so they run again. A refusal is a FAIL before the marker is
+    # armed: in the upt path it powers off, and once charged the unit runs
+    # the install again.
+    write_gates || finish FAIL "$1" "refused before any write: $WG_MSG"
     for s in $_plan; do
         "step_$(echo "$s" | tr - _)"
     done

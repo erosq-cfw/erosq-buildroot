@@ -301,5 +301,67 @@ ck "listed applets only: the menu reads keys and powers off" poweroff "$(cat "$R
 ck "listed applets only: Power off chosen from the menu" "INFO|rescue|power off chosen" \
 	"$(tail -n1 "$R/mnt/$E/result.txt")"
 
+
+# --- the battery and hardware gates also run outside the menu ------------------------
+# The stock updater's path (upt) and the developer modes reach run_plan with
+# no menu in front; the same gates must refuse there before any write.
+# upt at 30 % on battery: refused, nothing on the chip or the card, no marker
+R=$T/gupt; mkunit "$R"; mkupt "$R"; B=$R/sys/class/power_supply/axp2101-battery
+echo 30 > "$B/capacity"
+ck "gate, upt at 30 %: powers off" poweroff "$(boot "$R")"
+ck "gate, upt at 30 %: nothing written" "" "$(cat "$R/writes")"
+ck "gate, upt at 30 %: no retry marker" no "$(yes_ test -e "$R/mnt/$E/.attempted")"
+ck "gate, upt at 30 %: no erosq.itb copied" no "$(yes_ test -e "$R/mnt/erosq.itb")"
+ck "gate, upt at 30 %: mode file kept for the retry" upt "$(cat "$R/mnt/$E/mode" 2>/dev/null)"
+ck "gate, upt at 30 %: recorded" "FAIL|gate-battery|battery 30 % (Discharging), below 50 % with no charger
+FAIL|upt|refused before any write: Battery 30 %. Plug in the charger, or charge to 50 %." \
+	"$(tail -n2 "$R/mnt/$E/result.txt")"
+# charged: the same card installs
+echo 80 > "$B/capacity"
+ck "gate, upt once charged: reboots after the install" reboot "$(boot "$R")"
+ck "gate, upt once charged: PASS" yes "$(yes_ grep -q '^PASS|upt|' "$R/mnt/$E/result.txt")"
+# upt at 30 % on the charger: allowed
+R=$T/gupt2; mkunit "$R"; mkupt "$R"; B=$R/sys/class/power_supply/axp2101-battery
+echo 30 > "$B/capacity"; echo Charging > "$B/status"
+ck "gate, upt at 30 % charging: reboots after the install" reboot "$(boot "$R")"
+ck "gate, upt at 30 % charging: PASS" yes "$(yes_ grep -q '^PASS|upt|' "$R/mnt/$E/result.txt")"
+# upt with no AXP2101: the hardware gate refuses
+R=$T/gupt3; mkunit "$R"; mkupt "$R"; rm -rf "$R/sys/class/power_supply/axp2101-battery"
+ck "gate, upt with no AXP2101: powers off" poweroff "$(boot "$R")"
+ck "gate, upt with no AXP2101: nothing written" "" "$(cat "$R/writes")"
+ck "gate, upt with no AXP2101: recorded" yes "$(yes_ grep -q '^FAIL|gate-hw|no AXP2101' "$R/mnt/$E/result.txt")"
+# install (developer card) at 30 %: refused, reboots (the unit boots something else)
+R=$T/ginst; mkunit "$R"; mkdir -p "$R/mnt/$E"; echo install > "$R/mnt/$E/mode"
+printf 'UBI#..kernel..rootfs..kernel_b..rootfs_b' > "$R/mnt/$E/nand.ubi"
+printf 'spl' > "$R/mnt/$E/our-spl.bin"; printf 'u-boot..abselect..' > "$R/mnt/$E/our-uboot.bin"
+(cd "$R/mnt/$E" && md5sum nand.ubi our-spl.bin our-uboot.bin > md5sums)
+echo 30 > "$R/sys/class/power_supply/axp2101-battery/capacity"
+ck "gate, install at 30 %: reboots" reboot "$(boot "$R")"
+ck "gate, install at 30 %: nothing written" "" "$(cat "$R/writes")"
+ck "gate, install at 30 %: no retry marker" no "$(yes_ test -e "$R/mnt/$E/.attempted")"
+ck "gate, install at 30 %: recorded" yes "$(yes_ grep -q '^FAIL|install|refused before any write' "$R/mnt/$E/result.txt")"
+# restore on a 256 MiB chip: the hardware gate refuses
+R=$T/grest; mkunit "$R"; mkdir -p "$R/mnt/$E"; echo restore > "$R/mnt/$E/mode"
+truncate -s 134217728 "$R/mnt/$E/flash.img"; echo 268435456 > "$R/sys/class/mtd/mtd4/size"
+ck "gate, restore on a 256 MiB chip: reboots" reboot "$(boot "$R")"
+ck "gate, restore on a 256 MiB chip: nothing written" "" "$(cat "$R/writes")"
+ck "gate, restore on a 256 MiB chip: recorded" yes \
+	"$(yes_ grep -q '^FAIL|gate-hw|the chip is 268435456 bytes, not 134217728' "$R/mnt/$E/result.txt")"
+# stock with an unreadable battery (the unit from the stock run above)
+R=$T/stock; echo stock > "$R/mnt/$E/mode"; : > "$R/writes"
+echo x > "$R/sys/class/power_supply/axp2101-battery/capacity"
+ck "gate, stock with no readable battery: reboots" reboot "$(boot "$R")"
+ck "gate, stock with no readable battery: nothing written" "" "$(cat "$R/writes")"
+ck "gate, stock with no readable battery: recorded" yes "$(yes_ grep -q '^FAIL|gate-battery|cannot read the battery' "$R/mnt/$E/result.txt")"
+# uninstall at 30 % (the unit from the first upt run: its backup and record)
+R=$T/upt; S=$R/mnt/$E
+cp -r "$T/stock/mnt/$E/stock.upt" "$T/stock/mnt/$E/stock.upt.d" "$S/"
+echo uninstall > "$S/mode"; : > "$R/writes"
+echo 30 > "$R/sys/class/power_supply/axp2101-battery/capacity"
+ck "gate, uninstall at 30 %: powers off" poweroff "$(boot "$R")"
+ck "gate, uninstall at 30 %: nothing written" "" "$(cat "$R/writes")"
+ck "gate, uninstall at 30 %: update.upt not retired" yes "$(yes_ test -e "$R/mnt/update.upt")"
+ck "gate, uninstall at 30 %: recorded" yes "$(yes_ grep -q '^FAIL|uninstall|refused before any write' "$S/result.txt")"
+
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
