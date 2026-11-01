@@ -304,4 +304,30 @@ got=$(sh -c '. "$1"; il_upt_md5 "$2" uimage.bin' sh "$I/install-lib.sh" "$T/UPDA
 [ "$got" = "$(md5 "$T/inst.uImage")" ] || fail "il_upt_md5 does not read build-upt.py's UPDATE.TXT"
 got=$(sh -c '. "$1"; il_upt_product "$2"' sh "$I/install-lib.sh" "$T/VERSION.TXT")
 [ "$got" = erosq_2024 ] || fail "il_upt_product does not read build-upt.py's VERSION.TXT"
+
+# --- build-initramfs.sh: what it refuses before building anything ----------------
+# a fake toolchain and a fake Buildroot; each case must stop at its own gate
+mkdir -p "$T/xc" "$T/brs" "$T/bro/target"
+printf '#!/bin/sh\nexit 0\n' > "$T/xc/mipsel-linux-gcc"; chmod +x "$T/xc/mipsel-linux-gcc"
+FB='fatload mmc 0 ${loadaddr} erosq.itb; bootm ${loadaddr}; fatload mmc 0 ${loadaddr} erosq-install/installer.uImage; bootm ${loadaddr}'
+mkenv() { # mkenv <out> <bootcmd tail> <altbootcmd as the last line>
+	{ printf 'abselect=if test x = b; then setenv kvol kernel_b; fi\naltbootcmd=\n'
+	  printf 'altbootcmd=%s\n' "$3"
+	  printf 'baseargs=console=ttyS2,115200n8 ubi.mtd=3\nboot_slot=a\nbootcmd=run abselect; ubi part ubi; %s\nbootlimit=3\n' "$2"; } > "$1"
+}
+bir() { CROSS="$T/xc/mipsel-linux-" bash "$I/build-initramfs.sh" "$T/birw" "$T/brs" "$T/bro" "$1" "$T/ir.cpio.gz" 2>&1; }
+mkenv "$T/env.good" "$FB" 'setenv boot_try; run bootcmd'
+bir "$T/env.good" | grep -q 'FATAL: .*no BUSYBOX_VERSION' || fail "build-initramfs stopped before busybox on a good env"
+printf 'BR2_PACKAGE_EROSQ_BOARD_SEED_AUTHORIZED_KEYS="/x/seed-authorized_keys"\n' > "$T/bro/.config"
+bir "$T/env.good" | grep -q 'FATAL: .*private build' || fail "build-initramfs took a build with seed SSH keys"
+printf 'BR2_PACKAGE_EROSQ_BOARD_SEED_AUTHORIZED_KEYS=""\n' > "$T/bro/.config"
+bir "$T/env.good" | grep -q 'FATAL: .*no BUSYBOX_VERSION' || fail "build-initramfs refused a build with no seed SSH keys"
+mkenv "$T/env.old" 'fatload mmc 0 ${loadaddr} erosq.itb; bootm ${loadaddr}' 'setenv boot_try; run bootcmd'
+bir "$T/env.old" | grep -q 'FATAL: .*does not fall back' || fail "build-initramfs took an env with no installer.uImage fallback"
+mkenv "$T/env.noalt" "$FB" ''
+sed -i '3d' "$T/env.noalt"; printf 'altbootcmd=\n' >> "$T/env.noalt"
+bir "$T/env.noalt" | grep -q 'FATAL: .*altbootcmd ends up empty' || fail "build-initramfs took an env whose last altbootcmd is empty"
+grep -v '^baseargs=' "$T/env.good" > "$T/env.nobase"
+bir "$T/env.nobase" | grep -q 'FATAL: .*baseargs ends up empty or missing' || fail "build-initramfs took an env with no baseargs"
+
 echo "PASS: installer tools"

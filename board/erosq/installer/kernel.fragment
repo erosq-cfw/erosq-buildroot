@@ -12,9 +12,10 @@ CONFIG_MIPS_RAW_APPENDED_DTB=y
 # CONFIG_BUILTIN_DTB_ALL is not set
 CONFIG_BLK_DEV_LOOP=y
 CONFIG_ISO9660_FS=y
-# no earlycon: it touches UART2 before its clock is on, and the stock
-# bootloader leaves that clock gated (a silent hang)
-CONFIG_CMDLINE="console=ttyS2,115200n8"
+# The command line is installer.dts's bootargs (MIPS_CMDLINE_FROM_DTB; there
+# is no built-in one: CMDLINE_BOOL is off). No earlycon there or anywhere: it
+# touches UART2 before its clock is on, and the stock bootloader leaves that
+# clock gated (a silent hang). ci/installer.sh refuses it in CONFIG_CMDLINE.
 # CONFIG_SOUND is not set
 # CONFIG_NET is not set
 # USB device side only, for the rescue menu's USB drive mode: the DWC2
