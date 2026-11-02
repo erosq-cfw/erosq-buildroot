@@ -13,6 +13,9 @@
 # half is in /etc/swupdate/public.pem (BR2_PACKAGE_EROSQ_BOARD_SWU_PUBKEY). The
 # sha256 in sw-description authenticates each image, so one signature covers the
 # bundle. --unsigned: CI builds; the maintainer signs the release locally.
+#
+# Reproducible: every entry is 0644, owned 0:0 and dated $SOURCE_DATE_EPOCH
+# (default 0), with inodes renumbered, so the same inputs give the same bytes.
 set -e
 USAGE="usage: $0 {--key <private.pem> | --unsigned} <erosq.itb> <rootfs.squashfs> <out.swu>"
 KEY=${EROSQ_SWU_KEY:-}; UNSIGNED=
@@ -55,5 +58,6 @@ if [ -z "$UNSIGNED" ]; then
 	FILES="sw-description sw-description.sig erosq.itb rootfs.squashfs"
 fi
 # shellcheck disable=SC2086 # FILES is a fixed word list; order = swupdate's
-( cd "$WORK" && printf '%s\n' $FILES | cpio -o -H crc 2>/dev/null ) > "$OUT"
+( cd "$WORK" && chmod 0644 $FILES && touch -d "@${SOURCE_DATE_EPOCH:-0}" $FILES &&
+	printf '%s\n' $FILES | cpio -o -H crc --reproducible -R 0:0 2>/dev/null ) > "$OUT"
 echo "built $OUT${UNSIGNED:+ (UNSIGNED)}  fw=$FWVER  (kernel=$KVER rootfs=$RVER)  kSHA=$KSHA  rSHA=$RSHA"

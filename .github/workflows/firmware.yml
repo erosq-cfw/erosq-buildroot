@@ -208,7 +208,9 @@ jobs:
           if [ "$RELEASE_INSTALLER" = true ]; then
             cp "$I/installer/update.upt" "$I/installer/installer.uImage" "$O/"
           fi
-          board/erosq/swu/mk-erosq-swu.sh --unsigned "$itb" "$I/rootfs/rootfs.squashfs" "$O/erosq-unsigned.swu"
+          # the cpio headers carry the commit date, so a rebuild is byte-identical
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) \
+            board/erosq/swu/mk-erosq-swu.sh --unsigned "$itb" "$I/rootfs/rootfs.squashfs" "$O/erosq-unsigned.swu"
           cpio -i --to-stdout sw-description < "$O/erosq-unsigned.swu" > "$O/sw-description"
           (cd "$O" && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
 
