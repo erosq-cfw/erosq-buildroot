@@ -38,6 +38,9 @@ jobs:
           gh run watch "$id" --exit-status --interval 120 > /dev/null
           gh run download "$id" -n swu -D new
           gh release download "$tag" -p SHA256SUMS -D old
-          diff <(sort old/SHA256SUMS) <(sort new/SHA256SUMS) ||
+          # only the files the release has: the rebuild may add the installer
+          # (EROSQ_RELEASE_INSTALLER turned on after this release); a file it
+          # lacks still fails
+          diff <(sort old/SHA256SUMS) <(awk 'NR==FNR {f[$2]; next} $2 in f' old/SHA256SUMS new/SHA256SUMS | sort) ||
             { echo "::error::$tag does not reproduce (diff above: < release, > rebuild)"; exit 1; }
           echo "$tag reproduces: $(wc -l < old/SHA256SUMS) files identical"

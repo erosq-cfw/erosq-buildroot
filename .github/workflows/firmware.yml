@@ -196,12 +196,18 @@ jobs:
           path: ${{ runner.temp }}/in
 
       - name: Build .swu
+        env:
+          # repo variable, unset = off: the installer job still builds and gates,
+          # but its files stay out of the release until its hardware test passes
+          RELEASE_INSTALLER: ${{ vars.EROSQ_RELEASE_INSTALLER }}
         run: |
           I=$RUNNER_TEMP/in; O=$RUNNER_TEMP/out; mkdir -p "$O"
           itb=$(ls "$I"/kernel/erosq-*.itb)
           cp "$itb" "$I/rootfs/rootfs.squashfs" "$I/uboot/u-boot-flash.bin" "$I/uboot/u-boot-spl.bin" "$I/sdbundle/erosq-sd-bundle.zip" "$O/"
           # the stock-firmware installer: in SHA256SUMS and attested with the rest
-          cp "$I/installer/update.upt" "$I/installer/installer.uImage" "$O/"
+          if [ "$RELEASE_INSTALLER" = true ]; then
+            cp "$I/installer/update.upt" "$I/installer/installer.uImage" "$O/"
+          fi
           board/erosq/swu/mk-erosq-swu.sh --unsigned "$itb" "$I/rootfs/rootfs.squashfs" "$O/erosq-unsigned.swu"
           cpio -i --to-stdout sw-description < "$O/erosq-unsigned.swu" > "$O/sw-description"
           (cd "$O" && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
