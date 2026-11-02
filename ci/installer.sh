@@ -12,9 +12,12 @@
 #     -> <dir>/out/{update.upt,nand.ubi,MD5SUMS}
 # Every gate runs before anything is written to out/.
 # Needs: ubinize (mtd-utils), mkimage + dumpimage, zstd, lz4, unsquashfs, python3 with pycdlib,
-# cpio, and MKSPL (default mkspl-x1000 on PATH: Rockbox tools/, GPL-2.0+).
-# Env: SOURCE_DATE_EPOCH (else the commit time), MKSPL, ANON_PATTERNS,
-# LINUX_GIT (a local clone works too), CROSS (default the SDK's), BR2_DL_DIR, JOBS.
+# cpio, and a host cc for mkspl-x1000 (Rockbox tools/, GPL-2.0+; built from
+# ROCKBOX_SHA, its source checked against MKSPL_SHA256).
+# Env: SOURCE_DATE_EPOCH (else the commit time), MKSPL (a built mkspl-x1000
+# instead), ROCKBOX_GIT (a local clone, else the source is downloaded),
+# ANON_PATTERNS, LINUX_GIT (a local clone works too), CROSS (default the SDK's),
+# BR2_DL_DIR, JOBS.
 set -euo pipefail
 EXT=$(cd "$(dirname "$0")/.." && pwd)
 I=$EXT/board/erosq/installer
@@ -117,13 +120,27 @@ export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$EXT" log -1 --format=%c
 O=$W/out T=$W/tmp
 rm -rf "$O" "$T" && mkdir -p "$O" "$T"
 
+# the boot ROM header writer, from the pinned Rockbox source
+if [ -z "${MKSPL:-}" ]; then
+	# shellcheck source=pins.mk disable=SC1091
+	. "$EXT/pins.mk"
+	if [ -n "${ROCKBOX_GIT:-}" ]; then
+		git -C "$ROCKBOX_GIT" show "$ROCKBOX_SHA:tools/mkspl-x1000.c" > "$T/mkspl-x1000.c"
+	else
+		wget -q -O "$T/mkspl-x1000.c" "https://raw.githubusercontent.com/Rockbox/rockbox/$ROCKBOX_SHA/tools/mkspl-x1000.c"
+	fi
+	echo "$MKSPL_SHA256  $T/mkspl-x1000.c" | sha256sum -c --quiet - || fail "mkspl-x1000.c: sha256 mismatch"
+	${HOSTCC:-cc} -O2 -o "$T/mkspl-x1000" "$T/mkspl-x1000.c"
+	MKSPL=$T/mkspl-x1000
+fi
+
 # the brick ceiling first: nothing else matters if this fails
 "$I/check-uimage.sh" "$UIMAGE"
 # nothing private inside, whatever built the inputs (unpacked all the way down)
 "$I/check-payload.sh" "$UIMAGE" "$ITB" "$ROOTFS" "$SPL_RAW" "$UBOOT"
 
 # SPL with the X1000 boot ROM header for NAND, padded to 8 KiB
-"${MKSPL:-mkspl-x1000}" -type=nand -ppb=2 -bpp=2 "$SPL_RAW" "$T/spl.erosq"
+"$MKSPL" -type=nand -ppb=2 -bpp=2 "$SPL_RAW" "$T/spl.erosq"
 [ "$(stat -c %s "$T/spl.erosq")" -le 8192 ] || fail "SPL with header is over 8 KiB"
 truncate -s 8192 "$T/spl.erosq"
 # U-Boot padded to the 1 MiB the SPL reads

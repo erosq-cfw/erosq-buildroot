@@ -11,6 +11,10 @@ FIRMWARE_SHA=650011c4508b869699bc9afd57c248cdd5a7661e
 # kernel and U-Boot sources (ci/kernel.sh, ci/uboot.sh)
 LINUX_SHA=5ce79c8444d604e4a48b90b56b683b60a25336d0
 UBOOT_SHA=c0f754d270c6cf799636f932c8d5bfcead7e78ee
+# update.upt (ci/installer.sh upt): the SPL's boot ROM header is written by
+# Rockbox's tools/mkspl-x1000.c (GPL-2.0+, a build tool only), compiled on the host
+ROCKBOX_SHA=d54b9e6f8d6f43224aa39b94036486ac2aceee91
+MKSPL_SHA256=c20f443b3d20ed1a4b7122eebb94a7303028e6094e4343c500533415057726f9
 # SD-card bundle (ci/sdbundle.sh): launchers, games and emulators, built
 # against the rootfs staging sysroot
 SD_BUNDLE_SHA=2c1acd101a57dc2ab3fffe713f4e568f3d9887b0
