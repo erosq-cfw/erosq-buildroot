@@ -47,11 +47,15 @@ jobs:
           I=$RUNNER_TEMP/in; A=$RUNNER_TEMP/assets; mkdir -p "$A/extra"
           [[ $TAG =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]+(-rc[0-9]+)?$ ]] ||
             { echo "::error::tag $TAG: expected vYYYY.MM.N or vYYYY.MM.N-rcN"; exit 1; }
-          # swu/ holds the .swu, itb, squashfs, U-Boot, SD zip, sw-description
-          # and their SHA256SUMS, all attested by firmware.yml
+          # swu/ holds the .swu, itb, squashfs, U-Boot, SD zip, update.upt,
+          # installer.uImage, sw-description and their SHA256SUMS, all attested
+          # by firmware.yml
           cp "$I"/swu/* "$A/"
           (cd "$A" && sha256sum -c --quiet SHA256SUMS)
           cp "$I"/rootfs/legal-info.tar.gz "$I"/rootfs/sources.tar "$I"/rootfs/sbom.cdx.json "$A/extra/"
+          # the installer kernel's config and the initramfs linked into it (its
+          # GPL corresponding source is LINUX_SHA + board/erosq/installer/)
+          cp "$I"/installer/installer.config "$I"/installer/initramfs.cpio.gz "$A/extra/"
           cp pins.mk "$A/extra/PINS.txt"
           (cd "$A/extra" && sha256sum -- * > SHA256SUMS-extra && cat SHA256SUMS-extra)
           ls -l "$A" "$A/extra"

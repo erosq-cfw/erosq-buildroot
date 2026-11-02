@@ -1,7 +1,8 @@
 # Full firmware build: kernel + U-Boot (boot.yml), the rootfs with its
 # legal-info and SBOM (ci/rootfs.sh), the SD-card bundle (ci/sdbundle.sh),
-# and the UNSIGNED .swu with a build provenance attestation. Signing happens
-# on the maintainer's machine.
+# the stock-firmware installer update.upt (ci/installer.sh), and the UNSIGNED
+# .swu with a build provenance attestation. Signing happens on the
+# maintainer's machine.
 name: firmware
 
 on:
@@ -76,6 +77,21 @@ jobs:
           path: ${{ runner.temp }}/w/out/
           retention-days: 14
 
+      # for the installer job's initramfs (board/erosq/installer/build-initramfs.sh):
+      # the target tree and .config of this build, and Buildroot's busybox package
+      # (version, hash, patches). A tar keeps modes and links.
+      - name: Installer inputs
+        run: |
+          . ./pins.mk
+          tar -C "$RUNNER_TEMP/w" -cf "$RUNNER_TEMP/installer-in.tar" \
+            out-br/target out-br/.config "buildroot-$BUILDROOT_VERSION/package/busybox"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installer-in
+          path: ${{ runner.temp }}/installer-in.tar
+          retention-days: 1
+
       - name: SD-card bundle
         run: ci/sdbundle.sh "$RUNNER_TEMP/w" "$RUNNER_TEMP/sdbundle"
 
@@ -85,8 +101,81 @@ jobs:
           path: ${{ runner.temp }}/sdbundle/
           retention-days: 14
 
-  swu:
+  # update.upt: the installer kernel (LINUX_SHA + kernel.fragment, its
+  # initramfs from the rootfs job's Buildroot target), then the .upt with
+  # U-Boot and the SPL from the boot job and the itb + rootfs. Hard gates in
+  # ci/installer.sh: the 4 MiB stock-bootloader read (check-uimage.sh) and the
+  # payload scan (check-payload.sh), before anything reaches out/.
+  installer:
     needs: [boot, rootfs]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BR2_DL_DIR: ${{ github.workspace }}/../dl
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 250M
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Host packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -qy --no-install-recommends build-essential bc bison flex libssl-dev \
+            u-boot-tools ccache cpio wget mtd-utils squashfs-tools zstd lz4 lzop python3-pycdlib
+
+      - name: SDK
+        run: ci/sdk-fetch.sh "$RUNNER_TEMP"
+
+      # read-only: the rootfs job owns this cache (the busybox tarball)
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: inputs.cache || github.event_name == 'push'   # push: no inputs
+        with:
+          path: ${{ env.BR2_DL_DIR }}
+          key: dl-${{ hashFiles('pins.mk', 'configs/erosq_defconfig', 'package/**/*.hash', 'patches/**') }}
+          restore-keys: dl-
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: inputs.cache || github.event_name == 'push'   # push: no inputs
+        with:
+          path: .ccache
+          key: ccache-installer-${{ hashFiles('pins.mk', 'board/erosq/installer/kernel.fragment') }}
+          restore-keys: ccache-installer-
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: ${{ runner.temp }}/in
+
+      - name: Installer uImage
+        run: |
+          . ./pins.mk
+          I=$RUNNER_TEMP/in W=$RUNNER_TEMP/w
+          mkdir -p "$W" && tar -C "$W" -xf "$I/installer-in/installer-in.tar"
+          # build-initramfs.sh refuses a private build by this file; it must be here
+          [ -s "$W/out-br/.config" ] || { echo "::error::no Buildroot .config from the rootfs job"; exit 1; }
+          ci/installer.sh uimage "$W/inst" "$W/buildroot-$BUILDROOT_VERSION" "$W/out-br" "$I/uboot/u-boot-initial-env"
+
+      - name: update.upt
+        run: |
+          I=$RUNNER_TEMP/in; O=$RUNNER_TEMP/out; mkdir -p "$O"
+          itb=$(ls "$I"/kernel/erosq-*.itb)
+          ci/installer.sh upt "$RUNNER_TEMP/upt" "$RUNNER_TEMP/w/inst/out/installer.uImage" "$itb" \
+            "$I/rootfs/rootfs.squashfs" "$I/uboot/u-boot-spl.bin" "$I/uboot/u-boot.bin"
+          cp "$RUNNER_TEMP"/w/inst/out/{installer.uImage,installer.config,initramfs.cpio.gz} "$O/"
+          cp "$RUNNER_TEMP"/upt/out/{update.upt,MD5SUMS} "$O/"
+          ls -l "$O"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installer
+          path: ${{ runner.temp }}/out/
+          retention-days: 14
+
+  swu:
+    needs: [boot, rootfs, installer]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -111,6 +200,8 @@ jobs:
           I=$RUNNER_TEMP/in; O=$RUNNER_TEMP/out; mkdir -p "$O"
           itb=$(ls "$I"/kernel/erosq-*.itb)
           cp "$itb" "$I/rootfs/rootfs.squashfs" "$I/uboot/u-boot-flash.bin" "$I/uboot/u-boot-spl.bin" "$I/sdbundle/erosq-sd-bundle.zip" "$O/"
+          # the stock-firmware installer: in SHA256SUMS and attested with the rest
+          cp "$I/installer/update.upt" "$I/installer/installer.uImage" "$O/"
           board/erosq/swu/mk-erosq-swu.sh --unsigned "$itb" "$I/rootfs/rootfs.squashfs" "$O/erosq-unsigned.swu"
           cpio -i --to-stdout sw-description < "$O/erosq-unsigned.swu" > "$O/sw-description"
           (cd "$O" && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
