@@ -1,6 +1,7 @@
 # Weekly reproducibility check: rebuild the latest published release tag with
-# no caches (firmware.yml, cache: false) and compare every sha256 in its
-# SHA256SUMS with the release's. Any difference fails this run.
+# no caches (firmware.yml, cache: false) and compare every file in its
+# SHA256SUMS with the release's (ci/repro-cmp.py: by sha256, a .swu by its
+# cpio entries). Any difference fails this run.
 name: repro
 
 on:
@@ -20,6 +21,12 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
+      # this branch's ci/repro-cmp.py, not the tag's (older tags lack it)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Rebuild the latest release
         run: |
           tag=$(gh release list --exclude-drafts --exclude-pre-releases -L 1 --json tagName --jq '.[0].tagName // empty')
@@ -38,9 +45,14 @@ jobs:
           gh run watch "$id" --exit-status --interval 120 > /dev/null
           gh run download "$id" -n swu -D new
           gh release download "$tag" -p SHA256SUMS -D old
+          # a .swu is compared by its cpio entries, so fetch the release's copy
+          # (releases before SOURCE_DATE_EPOCH have header-only differences)
+          awk '$2 ~ /\.swu$/ { print $2 }' old/SHA256SUMS | while read -r f; do
+            gh release download "$tag" -p "$f" -D old
+          done
           # only the files the release has: the rebuild may add the installer
           # (EROSQ_RELEASE_INSTALLER turned on after this release); a file it
           # lacks still fails
-          diff <(sort old/SHA256SUMS) <(awk 'NR==FNR {f[$2]; next} $2 in f' old/SHA256SUMS new/SHA256SUMS | sort) ||
-            { echo "::error::$tag does not reproduce (diff above: < release, > rebuild)"; exit 1; }
-          echo "$tag reproduces: $(wc -l < old/SHA256SUMS) files identical"
+          python3 -I ci/repro-cmp.py old new ||
+            { echo "::error::$tag does not reproduce (see above)"; exit 1; }
+          echo "$tag reproduces"
