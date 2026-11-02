@@ -37,8 +37,10 @@ sign() {  # <unsigned.swu> <key> <out.swu>
 	openssl dgst -sha256 -verify "$S/public.pem" -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:-2 \
 		-signature "$S/sw-description.sig" "$S/sw-description" >/dev/null ||
 		die "signature does not verify against the rootfs public.pem (wrong key?)"
-	(cd "$S" && printf '%s\n' sw-description sw-description.sig erosq.itb rootfs.squashfs |
-		cpio -o -H crc 2>/dev/null) > "$3"
+	# as mk-erosq-swu.sh: 0644, 0:0, $SOURCE_DATE_EPOCH, renumbered inodes
+	(cd "$S" && set -- sw-description sw-description.sig erosq.itb rootfs.squashfs &&
+		chmod 0644 "$@" && touch -d "@${SOURCE_DATE_EPOCH:-0}" "$@" &&
+		printf '%s\n' "$@" | cpio -o -H crc --reproducible -R 0:0 2>/dev/null) > "$3"
 	rm -rf "$S"
 	echo "signed $3"
 }
