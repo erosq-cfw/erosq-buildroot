@@ -15,6 +15,8 @@ permissions:
 jobs:
   firmware:
     uses: ./.github/workflows/firmware.yml
+    secrets:
+      ANON_PATTERNS: ${{ secrets.ANON_PATTERNS }}   # the installer job's payload scan
     permissions:
       contents: read
       actions: read

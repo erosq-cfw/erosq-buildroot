@@ -23,6 +23,15 @@ EXT=$(cd "$(dirname "$0")/.." && pwd)
 I=$EXT/board/erosq/installer
 fail() { echo "FATAL: $*" >&2; exit 1; }
 
+# check-payload.sh scans for private names only when ANON_PATTERNS is set; a
+# CI build without it would publish an image the private tier never saw
+if [ -z "${ANON_PATTERNS:-}" ]; then
+	if [ "${CI:-}" = true ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
+		fail "ANON_PATTERNS is empty in CI: the payload scan's private tier would be skipped"
+	fi
+	echo "ci/installer.sh: ANON_PATTERNS not set: check-payload.sh runs its public tier only" >&2
+fi
+
 if [ "${1:-}" = uimage ]; then
 	[ $# -eq 5 ] || fail "usage: $0 uimage <dir> <buildroot-src> <buildroot-output> <u-boot-initial-env>"
 	# shellcheck source=pins.mk disable=SC1091

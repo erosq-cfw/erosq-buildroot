@@ -18,6 +18,10 @@ on:
         description: use the download and ccache caches (repro.yml turns them off)
         type: boolean
         default: true
+    secrets:
+      ANON_PATTERNS:
+        description: check-payload.sh's private tier (the installer job fails without it)
+        required: false
 
 permissions:
   contents: read
@@ -115,6 +119,8 @@ jobs:
       BR2_DL_DIR: ${{ github.workspace }}/../dl
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 250M
+      # check-payload.sh's private tier; ci/installer.sh fails without it in CI
+      ANON_PATTERNS: ${{ secrets.ANON_PATTERNS }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

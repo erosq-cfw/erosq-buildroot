@@ -330,4 +330,15 @@ bir "$T/env.noalt" | grep -q 'FATAL: .*altbootcmd ends up empty' || fail "build-
 grep -v '^baseargs=' "$T/env.good" > "$T/env.nobase"
 bir "$T/env.nobase" | grep -q 'FATAL: .*baseargs ends up empty or missing' || fail "build-initramfs took an env with no baseargs"
 
+# --- ci/installer.sh: the private tier is required in CI ----------------------
+ci() { env -u CI -u GITHUB_ACTIONS -u ANON_PATTERNS "$@" bash "$HERE/ci/installer.sh" 2>&1; }
+ci CI=true | grep -q 'FATAL: ANON_PATTERNS is empty in CI' || fail "ci/installer.sh ran in CI (CI=true) with no ANON_PATTERNS"
+ci GITHUB_ACTIONS=true | grep -q 'FATAL: ANON_PATTERNS is empty in CI' || fail "ci/installer.sh ran in GitHub Actions with no ANON_PATTERNS"
+ci GITHUB_ACTIONS=true ANON_PATTERNS= | grep -q 'FATAL: ANON_PATTERNS is empty in CI' || fail "ci/installer.sh took an empty ANON_PATTERNS in CI"
+out=$(ci GITHUB_ACTIONS=true ANON_PATTERNS=zq-private)
+case $out in *'FATAL: ANON_PATTERNS'*) fail "ci/installer.sh refused a set ANON_PATTERNS in CI" ;; *'FATAL: usage'*) ;; *) fail "ci/installer.sh: no usage error with ANON_PATTERNS set" ;; esac
+out=$(ci)
+case $out in *'FATAL: ANON_PATTERNS'*) fail "ci/installer.sh refused a local run with no ANON_PATTERNS" ;; esac
+case $out in *'ANON_PATTERNS not set'*'FATAL: usage'*) ;; *) fail "ci/installer.sh: no public-tier-only notice locally" ;; esac
+
 echo "PASS: installer tools"
