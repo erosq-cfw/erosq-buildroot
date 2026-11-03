@@ -12,6 +12,9 @@ I="$HERE/board/erosq/installer"
 PY=${PYTHON:-python3}
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 fail() { echo "FAIL: $*"; exit 1; }
+for c in mkimage dumpimage dtc mksquashfs unsquashfs cpio xz zstd lz4 bzip2 openssl; do
+	command -v "$c" >/dev/null || fail "no $c on PATH (dtc: apt device-tree-compiler; mkimage -f needs it)"
+done
 "$PY" -c 'import pycdlib' 2>/dev/null || fail "$PY has no pycdlib (pip install pycdlib)"
 
 # --- check-uimage.sh ---------------------------------------------------------

@@ -45,7 +45,9 @@ mkdir -p "$W/logs"
 fail=0
 for t in "$EXT"/tests/test_*.sh; do
 	n=$(basename "$t" .sh)
-	if BR=$BR FLAC=$FLAC sh "$t" > "$W/logs/$n.log" 2>&1; then r=ok; else r=FAIL; fi
+	# the interpreter the shebang names: a bash test under dash cascades
+	case $(head -n1 "$t") in *bash*) sh=bash ;; *) sh=sh ;; esac
+	if BR=$BR FLAC=$FLAC "$sh" "$t" > "$W/logs/$n.log" 2>&1; then r=ok; else r=FAIL; fi
 	grep -q -w SKIP "$W/logs/$n.log" && r="$r+SKIP"
 	echo "$r $n"
 	[ "$r" = ok ] || { fail=1; tail -20 "$W/logs/$n.log"; }

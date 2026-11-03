@@ -80,7 +80,9 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -qy --no-install-recommends build-essential bc cpio file rsync unzip wget \
             flac qemu-user squashfs-tools wpasupplicant iproute2 \
-            u-boot-tools python3-pycdlib lz4
+            u-boot-tools device-tree-compiler python3-pycdlib lz4
+          # device-tree-compiler: only a Recommends of u-boot-tools, and mkimage -f
+          # (test_installer's FIT) runs dtc
           # the qemu-mipsel and wpa_supplicant tests use unshare -r
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 

@@ -4,6 +4,9 @@
 # install-lib.sh are copied with their absolute paths moved under the unit's
 # directory; nothing else in them changes.
 # Run: bash tests/test_installer_init.sh
+# (bash only: under dash the {a,b} mkdir below makes one literal directory and
+# every later step cascades into "Directory nonexistent")
+[ -n "${BASH_VERSION:-}" ] || { echo "FAIL: needs bash, not sh (run: bash $0)"; exit 1; }
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 I=$HERE/../board/erosq/installer
@@ -20,6 +23,7 @@ yes_() { if "$@"; then echo yes; else echo no; fi; }
 mkunit() {
 	local R=$1 i=0 p n sz
 	mkdir -p "$R"/{bin,mnt,iso,dev/input,sys/class/mtd,sys/class/ubi,sys/class/input,proc/sys/vm}
+	[ -d "$R/bin" ] && [ -d "$R/dev/input" ] || { echo "FAIL: mkunit: could not lay out $R"; exit 1; }
 	for p in spl:131072 uboot:1048576 uboot-env:65536 ubi:4194304 wholechip:134217728 stockof:6291456; do
 		n=${p%%:*}; sz=${p#*:}
 		mkdir -p "$R/sys/class/mtd/mtd$i"
